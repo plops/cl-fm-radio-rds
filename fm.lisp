@@ -1,23 +1,58 @@
 
 (time
- (defparameter *demod*
+ (defparameter *input*
    (let* ((n 63438848)
 	  (a (make-array n :element-type '(unsigned-byte 8)))
-	  (c (make-array (floor n 2) :element-type '(complex single-float)))
-	  (d (make-array (length c)
-			 :element-type 'single-float)))
+	  (c (make-array (floor n 2) :element-type '(complex single-float))))
      (with-open-file (s "/home/martin/Downloads2/dlf.fm"
 			:element-type '(unsigned-byte 8))
        (read-sequence a s))
      (dotimes (i (floor n 2))
-       (setf (aref c i) 
-	     (complex (- (aref a (* 2 i)) 127f0)
-		      (- (aref a (1+ (* 2 i))) 127f0))))
-     (loop for i from 1 below (floor n 2) do
-	  (let ((prod (* (aref c i) (conjugate (aref c (1- i))))))
-	   (setf (aref d i) (realpart prod) #+nil(atan (imagpart prod)
-				  (realpart prod)))))
+       (let ((x  (aref a (* 2 i)))
+	     (y  (aref a (1+ (* 2 i)))))
+	 (when (= x y)
+	   (incf x .5))
+	 (setf (aref c i) 
+	       (complex (- x 127f0)
+			(- y 127f0)))))
+     c)))
+
+;; s = A e^ip
+;; ds/dt = d/dt A e^ip = A ip' e^ip
+;; ds/dt /s = ip'
+;; p' = Im[ds/dt /s]
+(time
+ (defparameter *demod*
+   (let* ((n (length *input*))
+	  (d (make-array n 
+			 :element-type 'single-float)))
+     (loop for i from 1 below n do
+	  (let* ((s (aref *input* i))
+		 (ds/dt (- s (aref *input* (1- i)))))
+	    (declare (type (complex single-float) s ds/dt))
+	    (setf (aref d i) (imagpart (/ ds/dt
+					  s)))))
      d)))
+
+(time
+ (defparameter *demod*
+   (let* ((n (length *input*))
+	  (d *input*)
+	  (e (make-array n 
+			 :element-type 'single-float))
+	  (o 1))
+     (loop for j from o below n do
+	  (let* ((ii (realpart (aref d (- j o))))
+		 (i (realpart (aref d j)))
+		 (q (imagpart (aref d j)))
+		 (qq (imagpart (aref d (- j o)))))
+	    (declare (type single-float i ii q qq))
+	    (setf (aref e j) (- (* ii q) 
+				(* qq i)))))
+     d)))
+
+#+nil
+(sb-ext:gc :full t)
 
 (defun store-sfloat (fn seq)
   (with-open-file (s fn
