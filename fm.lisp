@@ -53,7 +53,7 @@
 (time
  (progn
   (defparameter *rate* 2048000)
-  (defparameter *n-complex* (floor (1+ (expt 2 27)) #+nil 47448064 2))
+  (defparameter *n-complex* (floor (expt 2 18) #+nil 47448064 2))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -169,6 +169,79 @@
       d))
        (store-dfloat "/dev/shm/demod-heterodyn.dfloat" *demod-heterodyn*)
        nil))
+
+#+nil
+(progn ;; print demodulated spectrum
+ (let* ((k (napa-fft:fft *demod-heterodyn*))
+	(mag (map-into (make-array (length k)
+				   :element-type 'double-float)
+		       #'abs (fftshift k))))
+   (with-open-file (s "/dev/shm/o2.dat"
+		      :direction :output
+		      :if-does-not-exist :create
+		      :if-exists :supersede)
+     (loop for e across mag and i from (- (floor (length k) 2)) do
+	  (format s "~6,3f ~6,3f~%"  (/ (* 2 i 128d3)
+					(length k))  (log e))))))
+(/ (* i 128000d0) (length k))
+(* 3 1216)
+
+(/ (* 2 (- (* 3 1216) 100) 128d3)
+ (length *demod-heterodyn*))
+
+
+
+(defparameter *rds*
+ (progn ;; cut out +/-2kHz around 57kHz
+   (let* ((bw 4000)
+	  
+	  (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	  (nn (length d))
+	  (center-bin (floor (* 57d3 nn
+				(/ 256d3))))
+	  (n (next-power-of-two
+	      (* 4000 nn
+		 (/ (* 2 128d3)))))
+	  (nh (floor n 2))
+	  (a (make-array n :element-type (array-element-type d))))
+     (loop for i from (- center-bin nh) below (+ center-bin nh)
+	and ii from 0 
+	do
+	(setf (aref a ii) (aref d (+ (floor nn 2) i))))
+     a)))
+
+(defparameter *pilot*
+ (progn ;; cut out +/-2kHz around 19kHz
+   (let* ((bw 4000)
+	  
+	  (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	  (nn (length d))
+	  (center-bin (floor (* 19d3 nn
+				(/ 256d3))))
+	  (n (next-power-of-two
+	      (* 4000 nn
+		 (/ (* 2 128d3)))))
+	  (nh (floor n 2))
+	  (a (make-array n :element-type (array-element-type d))))
+     (loop for i from (- center-bin nh) below (+ center-bin nh)
+	and ii from 0 
+	do
+	(setf (aref a ii) (aref d (+ (floor nn 2) i))))
+     a)))
+
+#+nil
+(progn ;; print spectrum
+ (let ((d *rds*))
+   (with-open-file (s "/xdev/shm/o3.dat"
+		      :direction :output
+		      :if-does-not-exist :create
+		      :if-exists :supersede)
+     (loop for e across d and i from (- (floor (length d) 2)) do
+	  (format s "~6,3f ~6,3f~%"  i  (abs e))))))
+
+
+(napa-fft:fft 
+ (fftshift *psk*))
 
 (time
  (progn
