@@ -39,11 +39,12 @@
 (time
  (progn
   (defparameter *rate* 2048000)
-  (defparameter *n-complex* (floor (expt 2 16) #+nil 47448064 2))
+  (defparameter *n-complex* (floor (1+ (expt 2 16)) #+nil 47448064 2))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
-	   (c (make-array (next-power-of-two (floor n 2))
+	   (np2 (next-power-of-two (floor n 2)))
+	   (c (make-array np2
 			  :element-type '(complex double-float))))
       (with-open-file (s "/home/martin/Downloads2/dl2048000.fm"
 			 :element-type '(unsigned-byte 8))
@@ -54,8 +55,8 @@
 	  (when (= x y)
 	    (incf x .5))
 	  (setf (aref c i) 
-		(* (exp (complex 0d0 (* (/ (* 2d0 pi) *n-complex*)
-					i))) ;; this shifts one bin left
+		(* (exp (complex 0d0 (* (/ (* np2 592750) *rate*) (/ (* 2d0 pi) *n-complex*)
+					i)))
 		   (complex (- x 127d0)
 			    (- y 127d0))))))
       c))))
@@ -80,13 +81,26 @@
    (fftshift
     (napa-fft:fft *input*))))
 
+(defparameter *kin-filt*
+  (let* ((n (length *kin*))
+	 (nh (floor n 2))
+	 (res (make-array n :element-type (array-element-type *kin*)
+			  :initial-element (complex .001d0)))
+	 (bw (floor (* n 80000) ;; lowpass +/- 80kHz
+		    *rate*)))
+    (loop for i from (+ (- bw) nh)
+       upto (+ bw nh)
+	 do
+	 (setf (aref res i) (aref *kin* i)))
+    res))
 
 (time
  (let* ((nn (length *kin*))
        (all (make-array nn
 			:element-type 'double-float))
-       (m (map-into all #'abs *kin*))
-       (m2 (map-into all #'log all))
+       (m (map-into all #'abs *kin-filt*))
+       (m2 (map-into all #'log all)
+	 )
        (n 1000)
        (big-bins (floor nn
 			n))
