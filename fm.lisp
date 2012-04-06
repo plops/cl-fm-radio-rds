@@ -36,10 +36,24 @@
        (setf (aref o i) (deref a i)))
      (write-sequence o s))))
 
+(defun store-cdfloat (fn seq)
+  (with-open-file (s fn
+		     :direction :output
+		    :element-type '(unsigned-byte 8)
+		    :if-does-not-exist :create
+		    :if-exists :supersede)
+   (let* ((a (sb-alien:sap-alien (sb-sys:vector-sap seq)
+				 (sb-alien:* sb-alien:unsigned-char)))
+	  (n (length seq))
+	  (o (make-array (* n 16) :element-type '(unsigned-byte 8))))
+     (dotimes (i (* 16 n))
+       (setf (aref o i) (deref a i)))
+     (write-sequence o s))))
+
 (time
  (progn
   (defparameter *rate* 2048000)
-  (defparameter *n-complex* (floor (1+ (expt 2 16)) #+nil 47448064 2))
+  (defparameter *n-complex* (floor (1+ (expt 2 27)) #+nil 47448064 2))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -84,22 +98,26 @@
 (defparameter *kin-filt*
   (let* ((n (length *kin*))
 	 (nh (floor n 2))
-	 (res (make-array n :element-type (array-element-type *kin*)
-			  :initial-element (complex .001d0)))
-	 (bw (floor (* n 80000) ;; lowpass +/- 80kHz
-		    *rate*)))
-    (loop for i from (+ (- bw) nh)
-       upto (+ bw nh)
-	 do
-	 (setf (aref res i) (aref *kin* i)))
+	 
+	 (bw (floor (* n 128000) ;; lowpass +/- 128kHz
+		    *rate*))
+	 (n-small (next-power-of-two (* 2 bw)))
+	 (bww (floor n-small 2))
+	 (res (make-array n-small :element-type (array-element-type *kin*)
+			  :initial-element (complex .001d0))))
+    (format t "2*bw=~6,2f bww=~d~%" bw bww)
+    (loop for i from (+ (- bww) nh)
+       below (+ bww nh) and ii from 0
+       do
+	 (setf (aref res ii) (aref *kin* i)))
     res))
 
 (time
- (let* ((nn (length *kin*))
+ (let* ((nn (length *kin-filt*))
        (all (make-array nn
 			:element-type 'double-float))
-       (m (map-into all #'abs *kin-filt*))
-       (m2 (map-into all #'log all)
+	(m (map-into all #'abs *kin-filt*))
+       (m2 m;(map-into all #'log all)
 	 )
        (n 1000)
        (big-bins (floor nn
@@ -120,39 +138,57 @@
    (loop for i from (- (floor nn 2)) and e across *abs-kin* do
 	(format s "~7,3f ~7,3f~%" (/ (* *rate* i) *n-complex*) e)))))
 
+(time
+ (progn
+   (defparameter *input-filt*
+     (napa-fft:fft
+      (fftshift *kin-filt*)))
+   (store-cdfloat "/dev/shm/kin-filt.cdfload"
+		  *input-filt*)
+   nil))
+
+
 ;; s = A e^ip
 ;; ds/dt = d/dt A e^ip = A ip' e^ip
 ;; ds/dt /s = ip'
 ;; p' = Im[ds/dt /s]
 (time
- (defparameter *demod*
-   (let* ((n (length *input*))
-	  (d (make-array n 
-			 :element-type 'single-float)))
-     (loop for i from 1 below n do
-	  (let* ((s (aref *input* i))
-		 (ds/dt (- s (aref *input* (1- i)))))
-	    (declare (type (complex single-float) s ds/dt))
-	    (setf (aref d i) (imagpart (/ ds/dt
-					  s)))))
-     d)))
+ (progn
+   (defparameter *demod-heterodyn*
+    (let* ((in *input-filt*)
+	   (n (length in))
+	  
+	   (d (make-array n 
+			  :element-type 'double-float)))
+      (loop for i from 1 below n do
+	   (let* ((s (aref in i))
+		  (ds/dt (- s (aref in (1- i)))))
+	     (declare (type (complex double-float) s ds/dt))
+	     (setf (aref d i) (imagpart (/ ds/dt
+					   s)))))
+      d))
+       (store-dfloat "/dev/shm/demod-heterodyn.dfloat" *demod-heterodyn*)
+       nil))
 
 (time
- (defparameter *demod*
-   (let* ((n (length *input*))
-	  (d *input*)
-	  (e (make-array n 
-			 :element-type 'single-float))
-	  (o 1))
-     (loop for j from o below n do
-	  (let* ((ii (realpart (aref d (- j o))))
-		 (i (realpart (aref d j)))
-		 (q (imagpart (aref d j)))
-		 (qq (imagpart (aref d (- j o)))))
-	    (declare (type single-float i ii q qq))
-	    (setf (aref e j) (- (* ii q) 
-				(* qq i)))))
-     d)))
+ (progn
+   (defparameter *demod*
+    (let* ((n (length *input-filt*		     ))
+	   (d *input-filt*)
+	   (e (make-array n 
+			  :element-type 'double-float))
+	   (o 1))
+      (loop for j from o below n do
+	   (let* ((ii (realpart (aref d (- j o))))
+		  (i (realpart (aref d j)))
+		  (q (imagpart (aref d j)))
+		  (qq (imagpart (aref d (- j o)))))
+	     (declare (type double-float i ii q qq))
+	     (setf (aref e j) (- (* ii q) 
+				 (* qq i)))))
+      d))
+   (store-dfloat "/dev/shm/demod.dfloat" *demod*)
+   nil))
 
 #+nil
 (sb-ext:gc :full t)
@@ -167,5 +203,5 @@
   nil)
 
 (time
- (store-sfloat "/dev/shm/demod.sfload" *demod*))
+ )
 
