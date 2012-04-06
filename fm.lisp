@@ -54,8 +54,8 @@
 	  (when (= x y)
 	    (incf x .5))
 	  (setf (aref c i) 
-		(* #+nil (exp (complex 0d0 (* (/ (* 2d0 pi) *n-complex*)
-					i)))
+		(* (exp (complex 0d0 (* (/ (* 2d0 pi) *n-complex*)
+					i))) ;; this shifts one bin left
 		   (complex (- x 127d0)
 			    (- y 127d0))))))
       c))))
