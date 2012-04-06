@@ -53,7 +53,7 @@
 (time
  (progn
   (defparameter *rate* 2048000)
-  (defparameter *n-complex* (floor (expt 2 18) #+nil 47448064 2))
+  (defparameter *n-complex* (floor (expt 2 25) #+nil 47448064 2))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -69,7 +69,8 @@
 	  (when (= x y)
 	    (incf x .5))
 	  (setf (aref c i) 
-		(* (exp (complex 0d0 (* (/ (* np2 592750) *rate*) (/ (* 2d0 pi) *n-complex*)
+		(* (exp (complex 0d0 (* (/ (* np2 -507250 ;592750
+					      ) *rate*) (/ (* 2d0 pi) *n-complex*)
 					i)))
 		   (complex (- x 127d0)
 			    (- y 127d0))))))
@@ -99,7 +100,7 @@
   (let* ((n (length *kin*))
 	 (nh (floor n 2))
 	 
-	 (bw (floor (* n 128000) ;; lowpass +/- 128kHz
+	 (bw (floor (* n 128000) ;; lowpass +/- 64kHz
 		    *rate*))
 	 (n-small (next-power-of-two (* 2 bw)))
 	 (bww (floor n-small 2))
@@ -113,33 +114,34 @@
     res))
 
 (time
- (let* ((nn (length *kin-filt*))
-       (all (make-array nn
-			:element-type 'double-float))
-	(m (map-into all #'abs *kin-filt*))
-       (m2 m;(map-into all #'log all)
-	 )
-       (n 1000)
-       (big-bins (floor nn
-			n))
-       (res (make-array n :element-type 'double-float
-			:initial-element 0d0)))
-  (defparameter *abs-kin* all
-#+nil
-    (dotimes (i n)
-      (dotimes (b big-bins)
-	(let ((p (+ b (* 1000 i))))
-	  (when (< p nn)
-	    (incf (aref res i) (aref all p)))))))
-  (with-open-file (s "/dev/shm/o.dat"
-		    :direction :output
-		    :if-does-not-exist :create
-		    :if-exists :supersede)
-   (loop for i from (- (floor nn 2)) and e across *abs-kin* do
-	(format s "~7,3f ~7,3f~%" (/ (* *rate* i) *n-complex*) e)))))
+ (progn ;; print full spectrum
+  (let* ((nn (length *kin-filt*))
+	 (all (make-array nn
+			  :element-type 'double-float))
+	 (m (map-into all #'abs *kin-filt*))
+	 (m2 m				;(map-into all #'log all)
+	   )
+	 (n 1000)
+	 (big-bins (floor nn
+			  n))
+	 (res (make-array n :element-type 'double-float
+			  :initial-element 0d0)))
+    (defparameter *abs-kin* all
+      #+nil
+      (dotimes (i n)
+	(dotimes (b big-bins)
+	  (let ((p (+ b (* 1000 i))))
+	    (when (< p nn)
+	      (incf (aref res i) (aref all p)))))))
+    (with-open-file (s "/dev/shm/o.dat"
+		       :direction :output
+		       :if-does-not-exist :create
+		       :if-exists :supersede)
+      (loop for i from (- (floor nn 2)) and e across *abs-kin* do
+	   (format s "~7,3f ~7,3f~%" (/ (* *rate* i) *n-complex*) e))))))
 
 (time
- (progn
+ (progn ;; reverse ft
    (defparameter *input-filt*
      (napa-fft:fft
       (fftshift *kin-filt*)))
@@ -153,7 +155,7 @@
 ;; ds/dt /s = ip'
 ;; p' = Im[ds/dt /s]
 (time
- (progn
+ (progn ;; demodulate using heterodyne division
    (defparameter *demod-heterodyn*
     (let* ((in *input-filt*)
 	   (n (length in))
@@ -200,7 +202,7 @@
 	  (center-bin (floor (* 57d3 nn
 				(/ 256d3))))
 	  (n (next-power-of-two
-	      (* 4000 nn
+	      (* bw nn
 		 (/ (* 2 128d3)))))
 	  (nh (floor n 2))
 	  (a (make-array n :element-type (array-element-type d))))
@@ -210,6 +212,19 @@
 	(setf (aref a ii) (aref d (+ (floor nn 2) i))))
      a)))
 
+
+(floor (* 57d3 (length *demod-heterodyn*)
+	  (/ 256d3))
+       48)
+9728
+2097152
+32768
+
+(* 32768 (/ 9728 2097152))
+;; average 152 values
+
+
+(length *pilot*)
 (defparameter *pilot*
  (progn ;; cut out +/-2kHz around 19kHz
    (let* ((bw 4000)
@@ -219,7 +234,7 @@
 	  (center-bin (floor (* 19d3 nn
 				(/ 256d3))))
 	  (n (next-power-of-two
-	      (* 4000 nn
+	      (* bw nn
 		 (/ (* 2 128d3)))))
 	  (nh (floor n 2))
 	  (a (make-array n :element-type (array-element-type d))))
@@ -231,17 +246,37 @@
 
 #+nil
 (progn ;; print spectrum
- (let ((d *rds*))
-   (with-open-file (s "/xdev/shm/o3.dat"
+ (let ((d *pilot*))
+   (with-open-file (s "/dev/shm/o3.dat"
 		      :direction :output
 		      :if-does-not-exist :create
 		      :if-exists :supersede)
      (loop for e across d and i from (- (floor (length d) 2)) do
-	  (format s "~6,3f ~6,3f~%"  i  (abs e))))))
+	  (format s "~6,3f ~6,3f~%"  i  (log (abs e)))))))
 
+(progn ;; print waveform
+ (let ((d (napa-fft:fft (fftshift *pilot*)))
+       (f (napa-fft:fft (fftshift *rds*))))
+   (with-open-file (s "/dev/shm/o3.dat"
+		      :direction :output
+		      :if-does-not-exist :create
+		      :if-exists :supersede)
+     (loop for pil across d and sig across f and i from 0 do
+	  (let ((sum (complex 0d0))
+		(sums (complex 0d0)))
+	    (incf sum pil)
+	    (incf sums sig)
+	    (when (= 0 (mod i 152))
+	      
+	     (let ((q (/ sig pil)))
+	       (format s "~6,3f ~6,3f~%" i (realpart sums)))
+	     (setf sum (complex 0d0)
+		   sums (complex 0d0)))))
+     #+nil (progn
+       (terpri s)
+       (loop for pil across d and sig across f and i from 0 do
+	     (format s "~6,3f ~6,3f~%"  i  (realpart sig)))))))
 
-(napa-fft:fft 
- (fftshift *psk*))
 
 (time
  (progn
