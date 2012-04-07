@@ -20,7 +20,8 @@
 	  (o (make-array (* n 4) :element-type '(unsigned-byte 8))))
      (dotimes (i (* 4 n))
        (setf (aref o i) (deref a i)))
-     (write-sequence o s))))
+     (write-sequence o s)))
+  (values))
 
 (defun store-dfloat (fn seq)
   (with-open-file (s fn
@@ -34,7 +35,8 @@
 	  (o (make-array (* n 8) :element-type '(unsigned-byte 8))))
      (dotimes (i (* 8 n))
        (setf (aref o i) (deref a i)))
-     (write-sequence o s))))
+     (write-sequence o s)))
+  (values))
 
 (defun store-cdfloat (fn seq)
   (with-open-file (s fn
@@ -48,12 +50,16 @@
 	  (o (make-array (* n 16) :element-type '(unsigned-byte 8))))
      (dotimes (i (* 16 n))
        (setf (aref o i) (deref a i)))
-     (write-sequence o s))))
+     (write-sequence o s)))
+  (values))
 
-(time
- (progn
-  (defparameter *rate* 2048000)
-  (defparameter *n-complex* (floor (expt 2 25) #+nil 47448064 2))
+(defparameter *rate* 0)
+(defparameter *n-complex* 0)
+(defparameter *input* 0)
+
+(progn
+  (setf *rate* 2048000)
+  (setf *n-complex* (floor (expt 2 22) #+nil 47448064 2))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -71,11 +77,10 @@
 	  (setf (aref c i) 
 		(* (exp (complex 0d0 (* (/ (* np2 -507250 ;592750
 					      ) *rate*) (/ (* 2d0 pi) *n-complex*)
-					i)))
+						i)))
 		   (complex (- x 127d0)
 			    (- y 127d0))))))
-      c))))
-
+      c)))
 
 (defun fftshift (a)
   (let* ((n (length a))
@@ -91,75 +96,77 @@
     b))
 
 
-(time
- (defparameter *kin*
-   (fftshift
-    (napa-fft:fft *input*))))
+(defparameter *kin*
+  (fftshift
+   (napa-fft:fft *input*)))
+
+(defparameter *spurious-freq*
+  '((-130718.8 900) ;; second number is bandwidth (diameter)
+    (-120718.8  500)
+    (-119250.0  500)
+    (-69625.0  530)
+    (-59625.0  500)
+    (-58187.5  500)
+    (-16250.0  500)
+    (52500.0  500)
+    (62500.0  400)
+    (63968.8  500)
+    (82843.8  500)
+    (113593.8  900)
+    (123593.8  300)
+    (125031.2  500)))
+
 
 (defparameter *kin-filt*
   (let* ((n (length *kin*))
 	 (nh (floor n 2))
 	 
-	 (bw (floor (* n 128000) ;; lowpass +/- 64kHz
+	 (bw (floor (* n 160000) ;; bandpass +/- 160kHz
 		    *rate*))
-	 (n-small (next-power-of-two (* 2 bw)))
+	 (n-small (next-power-of-two (* 2 bw))
+	   )
 	 (bww (floor n-small 2))
 	 (res (make-array n-small :element-type (array-element-type *kin*)
-			  :initial-element (complex .001d0))))
-    (format t "2*bw=~6,2f bww=~d~%" bw bww)
+			  :initial-element (complex .0d0))))
+    (format t "2*bw=~6,2f bww=~d n-small=~d~%" bw bww n-small)
     (loop for i from (+ (- bww) nh)
        below (+ bww nh) and ii from 0
        do
-	 (setf (aref res ii) (aref *kin* i)))
+	 (setf (aref res ii) (if (< (- nh bw) i (+ nh bw))
+				 (aref *kin* i)
+				 (complex 0d0))))
+    (loop for (c bw) in *spurious-freq* do
+	 (let ((bw-bin (floor (* 2 n-small bw) ;; radius but i have to increase it
+			      (* 2 *rate*)))
+	       (c-bin (floor (* n c)
+			     *rate*)))
+	   
+	   (let ((pos (+ (floor n-small 2)
+			 c-bin)))
+	     (loop for i from (- pos bw-bin)
+	       upto (+ pos bw-bin) do
+		  (when (<= 0 i (1- n-small))
+		   (setf (aref res i) (complex 0d0)))))))
     res))
 
-(time
- (progn ;; print full spectrum
-  (let* ((nn (length *kin-filt*))
-	 (all (make-array nn
-			  :element-type 'double-float))
-	 (m (map-into all #'abs *kin-filt*))
-	 (m2 m				;(map-into all #'log all)
-	   )
-	 (n 1000)
-	 (big-bins (floor nn
-			  n))
-	 (res (make-array n :element-type 'double-float
-			  :initial-element 0d0)))
-    (defparameter *abs-kin* all
-      #+nil
-      (dotimes (i n)
-	(dotimes (b big-bins)
-	  (let ((p (+ b (* 1000 i))))
-	    (when (< p nn)
-	      (incf (aref res i) (aref all p)))))))
-    (with-open-file (s "/dev/shm/o.dat"
-		       :direction :output
-		       :if-does-not-exist :create
-		       :if-exists :supersede)
-      (loop for i from (- (floor nn 2)) and e across *abs-kin* do
-	   (format s "~7,3f ~7,3f~%" (/ (* *rate* i) *n-complex*) e))))))
-
-(time
- (progn ;; reverse ft
-   (defparameter *input-filt*
-     (napa-fft:ifft
-      (fftshift *kin-filt*)))
-   (store-cdfloat "/dev/shm/kin-filt.cdfload"
-		  *input-filt*)
-   nil))
+(progn ;; reverse ft
+  (defparameter *input-filt*
+    (napa-fft:ifft
+     (fftshift *kin-filt*)))
+  (store-cdfloat "/dev/shm/kin-filt.cdfload"
+		 *input-filt*)
+  nil)
 
 
 ;; s = A e^ip
 ;; ds/dt = d/dt A e^ip = A ip' e^ip
 ;; ds/dt /s = ip'
 ;; p' = Im[ds/dt /s]
-(time
- (progn ;; demodulate using heterodyne division
-   (defparameter *demod-heterodyn*
+(progn ;; demodulate using heterodyne division
+  (defparameter *demod-heterodyn*
     (let* ((in *input-filt*)
 	   (n (length in))
-	  
+	   
 	   (d (make-array n 
 			  :element-type 'double-float)))
       (loop for i from 1 below n do
@@ -169,255 +176,150 @@
 	     (setf (aref d i) (imagpart (/ ds/dt
 					   s)))))
       d))
-       (store-dfloat "/dev/shm/demod-heterodyn.dfloat" *demod-heterodyn*)
-       nil))
+  (store-dfloat "/dev/shm/demod-heterodyn.dfloat" *demod-heterodyn*)
+  nil)
 
-#+nil
-(progn ;; print demodulated spectrum
- (let* ((k (napa-fft:fft *demod-heterodyn*))
-	(mag (map-into (make-array (length k)
-				   :element-type 'double-float)
-		       #'abs (fftshift k))))
-   (with-open-file (s "/dev/shm/o2.dat"
-		      :direction :output
-		      :if-does-not-exist :create
-		      :if-exists :supersede)
-     (loop for e across mag and i from (- (floor (length k) 2)) do
-	  (format s "~6,3f ~6,3f~%"  (/ (* 2 i 128d3)
-					(length k))  (log e))))))
-(/ (* i 128000d0) (length k))
-(* 3 1216)
+(progn ;; cut out +/-50Hz around 19kHz
+  (let* ((bw 100)
+	 (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	 (nn (length d))
+	 (center-bin (floor (* 19d3 nn
+			       (/ 512d3))))
+	 (band-bin (next-power-of-two
+		    (* bw nn
+		       (/ 512d3))))
+	 (nh (floor band-bin 2))
+	 (a (make-array (floor band-bin) :element-type (array-element-type d))))
+    (loop for i from (- center-bin nh) below (+ center-bin nh) and ii from 0
+       do
+	 (setf (aref a ii) (aref d (+ (floor nn 2) i))))
+    (store-cdfloat 
+     (format nil "/dev/shm/pilot~6,3f.cdfloat" (* band-bin 512d3 (/ nn))) 
+     (napa-fft:ifft (fftshift a)))
+    nil))
 
-(/ (* 2 (- (* 3 1216) 100) 128d3)
- (length *demod-heterodyn*))
+(progn ;; cut out +/-2000Hz around 57kHz
+  (let* ((bw 4000)
+	 (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	 (nn (length d))
+	 (center-bin (floor (* 57d3 nn
+			       (/ 512d3))))
+	 (band-bin (next-power-of-two
+		    (* bw nn
+		       (/ 512d3))))
+	 (nh (floor band-bin 2))
+	 (a (make-array (floor band-bin) :element-type (array-element-type d))))
+    (loop for i from (- center-bin nh) below (+ center-bin nh) and ii from 0
+       do
+	 (setf (aref a ii) (aref d (+ (floor nn 2) i))))
+    (store-cdfloat 
+     (format nil "/dev/shm/rds~6,3f.cdfloat" (* band-bin 512d3 (/ nn))) 
+     (napa-fft:ifft (fftshift a)))
+    nil))
+
+(defun cdf->df (a)
+  (let ((b (make-array (length a) :element-type 'double-float)))
+    (dotimes (i (length a))
+      (setf (aref b i) (realpart (aref a i))))
+    b))
 
 (defparameter *pilot*
- (progn ;; cut out +/-250Hz around 19kHz
-   (let* ((bw 500)
-	  (d (fftshift (napa-fft:fft *demod-heterodyn*)))
-	  (nn (length d))
-	  (center-bin (floor (* 19d3 nn
-				(/ 256d3))))
-	  (band-bin (* bw nn
-		       (/ (* 2 128d3))))
-	  (nh (floor band-bin 2))
-	  (a (make-array nn :element-type (array-element-type d))))
-     (loop for i from (- center-bin nh) below (+ center-bin nh)
-	do
-	  (setf (aref a (+ (floor nn 2) i)) (aref d (+ (floor nn 2) i))
-		(aref a (- (floor nn 2) i)) (aref d (- (floor nn 2) i))))
-     a)))
+   (progn ;; cut out +/-50Hz around 19kHz, but leave at 19kHz
+     (let* ((bw 100)
+	    (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	    (nn (length d))
+	    (nh (floor nn 2))
+	    (center-bin (floor (* 19d3 nn
+				  (/ 512d3))))
+	    (band-bin (floor (* bw nn
+				(/ 512d3))
+			     2))
+	    (a (make-array nn :element-type (array-element-type d))))
+       (loop for i from (- center-bin band-bin)
+	  below (+ center-bin band-bin)
+	  do
+	  (setf (aref a (+ nh i)) (aref d (+ nh i))
+		(aref a (- nh i)) (aref d (- nh i))))
+       (cdf->df (napa-fft:ifft (fftshift a))))))
 
-(defparameter *pilot3*
- (progn ;; cut out +/-1000Hz around 57kHz
-   (let* ((bw 2000)
-	  (rp (napa-fft:fft (fftshift *pilot*)))
-	  (ma (reduce #'(lambda (x y) (max (realpart x) (realpart y))) (subseq rp 0 4000)))
-	  (rp2 (map-into rp #'(lambda (z) (complex (expt (/ (realpart z) ma) 3))) rp))
-	  (d (fftshift (napa-fft:fft rp2)))
-	  (nn (length d))
-	  (center-bin (floor (* 57d3 nn
-				(/ 256d3))))
-	  (band-bin (* bw nn
-		       (/ (* 2 128d3))))
-	  (nh (floor band-bin 2))
-	  (a (make-array nn :element-type (array-element-type d))))
-     (loop for i from (- center-bin nh) below (+ center-bin nh)
-	do
-	  (setf (aref a (+ (floor nn 2) i)) (aref d (+ (floor nn 2) i))
-		(aref a (- (floor nn 2) i)) (aref d (- (floor nn 2) i))))
-     a)))
+(progn
+ (defparameter *pilot-c* 
+   (progn ;; cut out +/-50Hz around 19kHz, leave at 19kHz but single side band
+     (let* ((bw 100)
+	    (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	    (nn (length d))
+	    (nh (floor nn 2))
+	    (center-bin (floor (* 19d3 nn
+				  (/ 512d3))))
+	    (band-bin (floor (* bw nn
+				(/ 512d3))
+			     2))
+	    (a (make-array nh :element-type (array-element-type d))))
+       (loop for i from (- center-bin band-bin)
+	  below (+ center-bin band-bin) and ii from 0
+	  do
+	  (setf (aref a (+ (floor nh 2) center-bin ii)) (aref d (+ nh i))))
+       (napa-fft:ifft (fftshift a)))))
+ (store-cdfloat "/dev/shm/pilot.cdfloat"
+		*pilot-c*))
+
+(defmacro with-plot ((stream fn) &body body)
+  `(progn
+     (with-open-file (s "/dev/shm/o.gp" :direction :output
+		       :if-exists :supersede
+		       :if-does-not-exist :create)
+       (format s "plot ~s u 1:2 w l;pause -1" ,fn))
+     (with-open-file (,stream ,fn :direction :output
+		       :if-exists :supersede
+		       :if-does-not-exist :create)
+       ,@body)))
+
+#+nil
+(with-plot (s "/dev/shm/o.dat")
+ (loop for e across *pilot-c* and i below 30000 do
+      (format s "~f ~9,4f~%" i (phase e))))
+
+(let* ((f0 4800)
+       (fs (* 8 f0))
+       (eta .707)
+       (fn 10)
+       (omega_n (* 2 pi fn))
+       (c2 (* 2 eta omega_n (/ fs)))
+       (c1 (/ (expt c2 2)
+	      (* 4 (expt eta 2)))))
+  (unless (and (< 0 c1)
+	       (< c2 c1 (- (* 2 c2) 4)))
+    (error "filter parameters are not stable")))
 
 (defparameter *rds*
- (progn ;; cut out +/-2kHz around 57kHz
+ (progn ;; cut out +/-2kHz around 57kHz, but leave at 57 kHz
    (let* ((bw 4000)
 	  (d (fftshift (napa-fft:fft *demod-heterodyn*)))
 	  (nn (length d))
+	  (nh (floor nn 2))
 	  (center-bin (floor (* 57d3 nn
-				(/ 256d3))))
-	  (n (* bw nn
-		(/ (* 2 128d3))))
-	  (nh (floor n 2))
+				(/ 512d3))))
+	  (band-bin (floor (* bw nn
+			      (/ 512d3))
+			     2))
 	  (a (make-array nn :element-type (array-element-type d))))
-     (loop for i from (- center-bin nh) below (+ center-bin nh)
+     (loop for i from (- center-bin band-bin)
+	below (+ center-bin band-bin)
 	do
-	  (setf (aref a (+ (floor nn 2) i)) (aref d (+ (floor nn 2) i))
-		(aref a (- (floor nn 2) i)) (aref d (- (floor nn 2) i))))
-     a)))
-
-(progn ;; 
- (defparameter *rds-base*
-   (progn ;; cut out +/-2kHz around 57kHz
-     (let* ((bw 4000)
-	    (d (fftshift (napa-fft:fft *demod-heterodyn*)))
-	    (nn (length d))
-	    (center-bin (floor (* 57d3 nn
-				  (/ 256d3))))
-	    (n (floor (* bw nn
-			 (/ (* 2 128d3)))))
-	    (nh (floor n 2))
-	    (a (make-array n :element-type (array-element-type d))))
-       (loop for i from (- center-bin nh) below (+ center-bin nh)
-	  and ii from 0
-	  do
-	  (setf (aref a ii) (aref d (+ (floor nn 2) i))))
+	  (setf (aref a (+ nh i)) (aref d (+ nh i))
+		(aref a (- nh i)) (aref d (- nh i))))
        a)))
- (store-cdfloat "/dev/shm/rds-base-square.cdfloat" (let* ((a (make-array (length *demod-heterodyn*)
-								  :element-type '(complex double-float)))
-						   (b (map-into a #'(lambda (x) (* x x))
-								(napa-fft:ifft (fftshift *rds-base*)))))
-					      b))
- nil)
-
-(floor (* 57d3 (length *demod-heterodyn*)
-	  (/ 256d3))
-       48)
-9728
-2097152
-32768
-
-(* 32768 (/ 9728 2097152))
-;; average 152 values
 
 
-(length *pilot*)
 
-(* 3 156000)
-
-(/ 19000 48f0)
-
-(/ 256000 1187.5)
-#+nil
-(progn ;; print spectrum
- (let ((d *pilot3*))
-   (with-open-file (s "/dev/shm/o3.dat"
-		      :direction :output
-		      :if-does-not-exist :create
-		      :if-exists :supersede)
-     (loop for e across d and i from (- (floor (length d) 2)) do
-	  (format s "~6,3f ~6,3f~%"  i  (log (abs (+ .0001 e))))))))
-
-(progn ;; print waveform
- (let ((d (napa-fft:fft (fftshift *pilot*)))
-       (d3 (napa-fft:fft (fftshift *pilot3*)))
-       (f (napa-fft:fft (fftshift *rds*))))
-   (with-open-file (s "/dev/shm/o3.dat"
-		      :direction :output
-		      :if-does-not-exist :create
-		      :if-exists :supersede)
-     #+nil
-     (loop for pil across d and sig across f and i from 0 below 30000 do
-	  (let ((sum (complex 0d0)))
-	    (incf sum (complex (realpart pil) (realpart sig)))
-	    (when (= 0 (mod (+ 215 i) 20))
-	      (format s "~6,3f ~6,3f~%" (realpart sum) (imagpart sum))
-	      (setf sum (complex 0d0)
-		))))
-
-     #+nil
-     (progn ;; mul
-       (terpri s)
-       (loop for pil across d3 and sig across f and i from 0 below 4000 do
-	    (let ((q (complex (realpart pil)
-			      (realpart sig))))
-	      (setf q (/ q (abs q)))
-	      (format s "~6,3f ~6,3f~%"  i (let ((p (let ((v (realpart pil)))
-						     v #+nil (cond ((< v -10) -200)
-							    ((<= v 10) v)
-							    ((< 10 v) 200))))
-						 (q (let ((v (realpart sig)))
-						      v #+nil(cond ((< v -10) -200)
-							    ((<= v 10) v)
-							    ((< 10 v) 200)))))
-					     (* p q))
-		     ))))
-     (progn ;; pilot3 rect
-       (terpri s)
-       (loop for pil across d3 and sig across f and i from 0 below 40000 do
-	    (let ((q (complex (realpart pil)
-			      (realpart sig))))
-	      (setf q (/ q (abs q)))
-	      (format s "~6,3f ~6,3f~%"  (realpart sig) (let ((v (realpart pil)))
-					     v #+nil (cond ((< v -10) -200000)
-						   ((<= v 10) v)
-						   ((< 10 v) 200000)))
-		     ))))
-     #+nil(progn ;; pilot rect
-       (terpri s)
-       (loop for pil across d and sig across f and i from 0 below 4000 do
-	    (let ((q (complex (realpart pil)
-			      (realpart sig))))
-	      (setf q (/ q (abs q)))
-	      (format s "~6,3f ~6,3f~%"  i (let ((v (realpart pil)))
-					     (cond ((< v -10) -300000)
-						   ((<= v 10) v)
-						   ((< 10 v) 300000)))
-		     ))))
-     #+nil(progn ;; rds rect
-       (terpri s)
-       (loop for pil across d and sig across f and i from 0 below 4000 do
-	    (let ((q (complex (realpart pil)
-			      (realpart sig))))
-	      (setf q (/ q (abs q)))
-	      (format s "~6,3f ~6,3f~%"  i (let ((v (realpart sig)))
-					     (cond ((< v -10) -100000)
-						   ((<= v 10) v)
-						   ((< 10 v) 100000)))
-		     ))))
-     #+inl(progn ;; rds
-       (terpri s)
-       (loop for pil across d and sig across f and i from 0 below 4000 do
-	    (let ((q (complex (realpart pil)
-			      (realpart sig))))
-	      (setf q (/ q (abs q)))
-	      (format s "~6,3f ~6,3f~%"  i (realpart sig)
-		     )))))))
+(progn ;; store both signals in file
+  (store-dfloat "/dev/shm/rds.dfloat"
+		(cdf->df (napa-fft:ifft (fftshift *rds*))))
+  (store-dfloat "/dev/shm/pilot.dfloat"
+		*pilot*))
 
 
-(time
- (progn
-   (defparameter *demod*
-    (let* ((n (length *input-filt*		     ))
-	   (d *input-filt*)
-	   (e (make-array n 
-			  :element-type 'double-float))
-	   (o 1))
-      (loop for j from o below n do
-	   (let* ((ii (realpart (aref d (- j o))))
-		  (i (realpart (aref d j)))
-		  (q (imagpart (aref d j)))
-		  (qq (imagpart (aref d (- j o)))))
-	     (declare (type double-float i ii q qq))
-	     (setf (aref e j) (- (* ii q) 
-				 (* qq i)))))
-      d))
-   (store-dfloat "/dev/shm/demod.dfloat" *demod*)
-   nil))
 
 #+nil
 (sb-ext:gc :full t)
-
-(defun realpartv (a)
-  (let* ((n (length a))
-	 (r (make-array n :element-type 'double-float)))
-    (dotimes (i n)
-      (setf (aref r i) (realpart (aref a i))))
-    r))
-
-(store-dfloat "/dev/shm/pilot3.dfloat" 
-	      (realpartv (napa-fft:fft (fftshift *pilot3*))))
-(store-dfloat "/dev/shm/rds.dfloat" 
-	      (realpartv (napa-fft:fft (fftshift *rds*))))
-
-
-#+nil
-(let* ((n  (* 10 1024)) ;; verify data export with a sine wave
-       (a (make-array n :element-type 'single-float)))
-  (dotimes (i n)
-    (setf (aref a i) (sin (* 2 #.(coerce pi 'single-float) i 200 (/ 1f0 n)))))
-  (store-sfloat "/dev/shm/sin.sfloat" a)
-  nil)
-
-(time
- )
 
