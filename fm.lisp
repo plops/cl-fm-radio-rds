@@ -231,7 +231,6 @@
 (defparameter *rds*
  (progn ;; cut out +/-2kHz around 57kHz
    (let* ((bw 4000)
-	  
 	  (d (fftshift (napa-fft:fft *demod-heterodyn*)))
 	  (nn (length d))
 	  (center-bin (floor (* 57d3 nn
@@ -246,6 +245,29 @@
 		(aref a (- (floor nn 2) i)) (aref d (- (floor nn 2) i))))
      a)))
 
+(progn ;; 
+ (defparameter *rds-base*
+   (progn ;; cut out +/-2kHz around 57kHz
+     (let* ((bw 4000)
+	    (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	    (nn (length d))
+	    (center-bin (floor (* 57d3 nn
+				  (/ 256d3))))
+	    (n (floor (* bw nn
+			 (/ (* 2 128d3)))))
+	    (nh (floor n 2))
+	    (a (make-array n :element-type (array-element-type d))))
+       (loop for i from (- center-bin nh) below (+ center-bin nh)
+	  and ii from 0
+	  do
+	  (setf (aref a ii) (aref d (+ (floor nn 2) i))))
+       a)))
+ (store-cdfloat "/dev/shm/rds-base-square.cdfloat" (let* ((a (make-array (length *demod-heterodyn*)
+								  :element-type '(complex double-float)))
+						   (b (map-into a #'(lambda (x) (* x x))
+								(napa-fft:ifft (fftshift *rds-base*)))))
+					      b))
+ nil)
 
 (floor (* 57d3 (length *demod-heterodyn*)
 	  (/ 256d3))
@@ -276,13 +298,14 @@
 	  (format s "~6,3f ~6,3f~%"  i  (log (abs (+ .0001 e))))))))
 
 (progn ;; print waveform
- (let ((d (napa-fft:fft (fftshift *pilot3*)))
+ (let ((d (napa-fft:fft (fftshift *pilot*)))
+       (d3 (napa-fft:fft (fftshift *pilot3*)))
        (f (napa-fft:fft (fftshift *rds*))))
    (with-open-file (s "/dev/shm/o3.dat"
 		      :direction :output
 		      :if-does-not-exist :create
 		      :if-exists :supersede)
-     
+     #+nil
      (loop for pil across d and sig across f and i from 0 below 30000 do
 	  (let ((sum (complex 0d0)))
 	    (incf sum (complex (realpart pil) (realpart sig)))
@@ -290,16 +313,65 @@
 	      (format s "~6,3f ~6,3f~%" (realpart sum) (imagpart sum))
 	      (setf sum (complex 0d0)
 		))))
+
      #+nil
-     (progn
+     (progn ;; mul
        (terpri s)
-       (loop for pil across d and sig across f and i from 0 below 100000 do
+       (loop for pil across d3 and sig across f and i from 0 below 4000 do
 	    (let ((q (complex (realpart pil)
 			      (realpart sig))))
 	      (setf q (/ q (abs q)))
-	      (format s "~6,3f ~6,3f~%"  (realpart q) (imagpart q)
-		     ))
-	    #+nil (format s "~6,3f ~6,3f~%"  i (realpart sig)))))))
+	      (format s "~6,3f ~6,3f~%"  i (let ((p (let ((v (realpart pil)))
+						     v #+nil (cond ((< v -10) -200)
+							    ((<= v 10) v)
+							    ((< 10 v) 200))))
+						 (q (let ((v (realpart sig)))
+						      v #+nil(cond ((< v -10) -200)
+							    ((<= v 10) v)
+							    ((< 10 v) 200)))))
+					     (* p q))
+		     ))))
+     (progn ;; pilot3 rect
+       (terpri s)
+       (loop for pil across d3 and sig across f and i from 0 below 40000 do
+	    (let ((q (complex (realpart pil)
+			      (realpart sig))))
+	      (setf q (/ q (abs q)))
+	      (format s "~6,3f ~6,3f~%"  (realpart sig) (let ((v (realpart pil)))
+					     v #+nil (cond ((< v -10) -200000)
+						   ((<= v 10) v)
+						   ((< 10 v) 200000)))
+		     ))))
+     #+nil(progn ;; pilot rect
+       (terpri s)
+       (loop for pil across d and sig across f and i from 0 below 4000 do
+	    (let ((q (complex (realpart pil)
+			      (realpart sig))))
+	      (setf q (/ q (abs q)))
+	      (format s "~6,3f ~6,3f~%"  i (let ((v (realpart pil)))
+					     (cond ((< v -10) -300000)
+						   ((<= v 10) v)
+						   ((< 10 v) 300000)))
+		     ))))
+     #+nil(progn ;; rds rect
+       (terpri s)
+       (loop for pil across d and sig across f and i from 0 below 4000 do
+	    (let ((q (complex (realpart pil)
+			      (realpart sig))))
+	      (setf q (/ q (abs q)))
+	      (format s "~6,3f ~6,3f~%"  i (let ((v (realpart sig)))
+					     (cond ((< v -10) -100000)
+						   ((<= v 10) v)
+						   ((< 10 v) 100000)))
+		     ))))
+     #+inl(progn ;; rds
+       (terpri s)
+       (loop for pil across d and sig across f and i from 0 below 4000 do
+	    (let ((q (complex (realpart pil)
+			      (realpart sig))))
+	      (setf q (/ q (abs q)))
+	      (format s "~6,3f ~6,3f~%"  i (realpart sig)
+		     )))))))
 
 
 (time
