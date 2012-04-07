@@ -308,15 +308,57 @@
 	     (setf old-phi (phase znew))
 	     znew)))))))
 
+(let ((old-phi 0d0)
+      (old-phi1 0d0)
+      (old-filt 0d0))
+  (defun reset-dpll3 (&optional (z (complex 0d0)))
+    (setf old-phi1 (phase z)
+	  old-phi 0d0
+	  old-filt 0d0))
+  (defun dpll3 (z) ;; generate 3 times input frequency
+    (declare (type (complex double-float) z)
+	     (values (complex double-float) ;; 19kHz 
+		     (complex double-float) ;; 57kHz
+		     &optional))
+   (let* ((f0 (* 3 -19.1d3))
+	  (fs 256d3)
+	  (eta .707d0)
+	  (fn 5000d0)
+	  (omega_n (* 2 pi fn))
+	  (c2 (* 2 eta omega_n (/ fs)))
+	  (c1 (/ (expt c2 2)
+		 (* 4 (expt eta 2))))
+	  (c (/ (* 2 pi f0) 
+		fs)))
+     (unless (and (< 0 c1)
+		  (< (- (* 2 c2) 4) c1 c2))
+       (error "filter parameters are not stable"))
+     (let* ((phi_i (phase z)) ;; PD
+	    (phi_e (- phi_i old-phi1))) 
+       (format t "~a~%" phi_e)
+       (progn ;; digital filter
+	 (let* ((top (+ (* c1 phi_e) old-filt))
+		(bottom (* c2 phi_e))
+		(filt-out (+ top bottom)))
+	   (setf old-filt top)
+	   (let ((znew  ;; VCO
+		  (exp (complex 0 (+ c filt-out old-phi))))
+		 (znew1 
+		  (exp (complex 0 (+ (/ c 3) filt-out old-phi1)))))
+	     (setf old-phi (phase znew)
+		   old-phi1 (phase znew1))
+	     (values znew1
+		     znew))))))))
+
 
 
 #+nil
 (with-plot (s "/dev/shm/o.dat")
-  (reset-dpll (aref *pilot-c* 0))
+  (reset-dpll3 (aref *pilot-c* 0))
   (format s "0 0~%")
   (loop for e across *pilot-c* and i below 3000 do
        (format s "~f ~9,4f~%" (1+ i)	; (realpart e) 
-	       (realpart (dpll e))
+	       (realpart (dpll3 e))
 	       ))
   (terpri s)
   (loop for e across *pilot-c* and i below 2700 do
