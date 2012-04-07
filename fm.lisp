@@ -410,12 +410,11 @@
 (with-plot (s "/dev/shm/o.dat")
   (reset-dpll3 (aref *pilot-c* 0))
   (format s "0 0~%")
-  (loop for e across *pilot-c* and i below 9000 do
+  (loop for e across *pilot-c* and i below 30000 do
        (format s "~f ~9,4f~%" i
-	       (- (phase (aref *rds* (1+ i))
-		       )
-		(phase (multiple-value-bind (a b) (dpll3 e)
-			 b))))))
+	       (phase (/ (aref *rds-c* (1+ i))
+			 (multiple-value-bind (a b) (dpll3 e)
+			   b))))))
 
 
 
