@@ -274,22 +274,44 @@
 		       :if-does-not-exist :create)
        ,@body)))
 
+(let ((old-phi 0d0)
+      (old-filt 0d0))
+  (defun reset-dpll ()
+    (setf old-phi 0d0
+	  old-filt 0d0))
+ (defun dpll (z)
+   (declare (type (complex double-float) z)
+	    (values (complex double-float) &optional))
+   (let* ((f0 4800)
+	  (fs (* 8 f0))
+	  (eta .707)
+	  (fn 10)
+	  (omega_n (* 2 pi fn))
+	  (c2 (* 2 eta omega_n (/ fs)))
+	  (c1 (/ (expt c2 2)
+		 (* 4 (expt eta 2))))
+	  (c .1))
+     (unless (and (< 0 c1)
+		  (< (- (* 2 c2) 4) c1 c2))
+       (error "filter parameters are not stable"))
+     (let* ((phi_i (phase z)) ;; PD
+	    (phi_e (- phi_i old-phi))) 
+       (progn ;; digital filter
+	 (let* ((top (+ (* c1 phi_e) old-filt))
+		(bottom (* c2 phi_e))
+		(filt-out (+ top bottom)))
+	   (setf old-filt top)
+	   (progn ;; VCO
+	     (setf old-phi (+ c filt-out old-phi))
+	     (exp (complex 0 old-phi)))))))))
+
+
 #+nil
 (with-plot (s "/dev/shm/o.dat")
- (loop for e across *pilot-c* and i below 30000 do
-      (format s "~f ~9,4f~%" i (phase e))))
+  (reset-dpll)
+  (loop for e across *pilot-c* and i below 30000 do
+       (format s "~f ~9,4f~%" i (realpart (dpll e)))))
 
-(let* ((f0 4800)
-       (fs (* 8 f0))
-       (eta .707)
-       (fn 10)
-       (omega_n (* 2 pi fn))
-       (c2 (* 2 eta omega_n (/ fs)))
-       (c1 (/ (expt c2 2)
-	      (* 4 (expt eta 2)))))
-  (unless (and (< 0 c1)
-	       (< c2 c1 (- (* 2 c2) 4)))
-    (error "filter parameters are not stable")))
 
 (defparameter *rds*
  (progn ;; cut out +/-2kHz around 57kHz, but leave at 57 kHz
