@@ -282,10 +282,10 @@
  (defun dpll (z)
    (declare (type (complex double-float) z)
 	    (values (complex double-float) &optional))
-   (let* ((f0 -19.0d3)
+   (let* ((f0 -19.1d3)
 	  (fs 256d3)
 	  (eta .707d0)
-	  (fn 100d0)
+	  (fn 5000d0)
 	  (omega_n (* 2 pi fn))
 	  (c2 (* 2 eta omega_n (/ fs)))
 	  (c1 (/ (expt c2 2)
@@ -303,7 +303,7 @@
 		(bottom (* c2 phi_e))
 		(filt-out (+ top bottom)))
 	   (setf old-filt top)
-	   (let ((znew  ; ; VCO
+	   (let ((znew  ;; VCO
 		  (exp (complex 0 (+ c filt-out old-phi)))))
 	     (setf old-phi (phase znew))
 	     znew)))))))
@@ -313,13 +313,14 @@
 #+nil
 (with-plot (s "/dev/shm/o.dat")
   (reset-dpll (aref *pilot-c* 0))
+  (format s "0 0~%")
   (loop for e across *pilot-c* and i below 3000 do
-       (format s "~f ~9,4f~%" i ; (realpart e) 
+       (format s "~f ~9,4f~%" (1+ i)	; (realpart e) 
 	       (realpart (dpll e))
 	       ))
   (terpri s)
-  (loop for e across *pilot-c* and i below 3000 do
-       (format s "~f ~9,4f~%" i  (cos (phase e)))))
+  (loop for e across *pilot-c* and i below 2700 do
+       (format s "~f ~9,4f~%" i  (realpart (exp (complex 0  (phase e)))))))
 
 
 (defparameter *rds*
