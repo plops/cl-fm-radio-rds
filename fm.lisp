@@ -256,7 +256,7 @@
 			     2))
 	    (a (make-array nh :element-type (array-element-type d))))
        (loop for i from (- center-bin band-bin)
-	  below (+ center-bin band-bin) and ii from 0
+	  below (+ center-bin band-bin) and ii from (- band-bin)
 	  do
 	  (setf (aref a (+ (floor nh 2) center-bin ii)) (aref d (+ nh i))))
        (napa-fft:ifft (fftshift a)))))
@@ -382,13 +382,46 @@
 	do
 	  (setf (aref a (+ nh i)) (aref d (+ nh i))
 		(aref a (- nh i)) (aref d (- nh i))))
-       a)))
+     (napa-fft:ifft (fftshift a)))))
+
+(progn
+ (defparameter *rds-c* 
+   (progn ;; cut out +/-50Hz around 19kHz, leave at 19kHz but single side band
+     (let* ((bw 9000)
+	    (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	    (nn (length d))
+	    (nh (floor nn 2))
+	    (center-bin (floor (* 57d3 nn
+				  (/ 512d3))))
+	    (band-bin (floor (* bw nn
+				(/ 512d3))
+			     2))
+	    (a (make-array nh :element-type (array-element-type d))))
+       (loop for i from (- center-bin band-bin)
+	  below (+ center-bin band-bin) and ii from (- band-bin)
+	  do
+	    (setf (aref a (+ (floor nh 2) center-bin ii))
+		(aref d (+ nh i))))
+       (napa-fft:ifft (fftshift a)))))
+ (store-cdfloat "/dev/shm/rds.cdfloat"
+		*rds-c*))
+
+#+nil
+(with-plot (s "/dev/shm/o.dat")
+  (reset-dpll3 (aref *pilot-c* 0))
+  (format s "0 0~%")
+  (loop for e across *pilot-c* and i below 9000 do
+       (format s "~f ~9,4f~%" i
+	       (- (phase (aref *rds* (1+ i))
+		       )
+		(phase (multiple-value-bind (a b) (dpll3 e)
+			 b))))))
 
 
 
 (progn ;; store both signals in file
   (store-dfloat "/dev/shm/rds.dfloat"
-		(cdf->df (napa-fft:ifft (fftshift *rds*))))
+		(cdf->df  *rds*))
   (store-dfloat "/dev/shm/pilot.dfloat"
 		*pilot*))
 
