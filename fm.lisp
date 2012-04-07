@@ -143,7 +143,7 @@
 (time
  (progn ;; reverse ft
    (defparameter *input-filt*
-     (napa-fft:fft
+     (napa-fft:ifft
       (fftshift *kin-filt*)))
    (store-cdfloat "/dev/shm/kin-filt.cdfload"
 		  *input-filt*)
@@ -191,7 +191,42 @@
 (/ (* 2 (- (* 3 1216) 100) 128d3)
  (length *demod-heterodyn*))
 
+(defparameter *pilot*
+ (progn ;; cut out +/-250Hz around 19kHz
+   (let* ((bw 500)
+	  (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	  (nn (length d))
+	  (center-bin (floor (* 19d3 nn
+				(/ 256d3))))
+	  (band-bin (* bw nn
+		       (/ (* 2 128d3))))
+	  (nh (floor band-bin 2))
+	  (a (make-array nn :element-type (array-element-type d))))
+     (loop for i from (- center-bin nh) below (+ center-bin nh)
+	do
+	  (setf (aref a (+ (floor nn 2) i)) (aref d (+ (floor nn 2) i))
+		(aref a (- (floor nn 2) i)) (aref d (- (floor nn 2) i))))
+     a)))
 
+(defparameter *pilot3*
+ (progn ;; cut out +/-1000Hz around 57kHz
+   (let* ((bw 2000)
+	  (rp (napa-fft:fft (fftshift *pilot*)))
+	  (ma (reduce #'(lambda (x y) (max (realpart x) (realpart y))) (subseq rp 0 4000)))
+	  (rp2 (map-into rp #'(lambda (z) (complex (expt (/ (realpart z) ma) 3))) rp))
+	  (d (fftshift (napa-fft:fft rp2)))
+	  (nn (length d))
+	  (center-bin (floor (* 57d3 nn
+				(/ 256d3))))
+	  (band-bin (* bw nn
+		       (/ (* 2 128d3))))
+	  (nh (floor band-bin 2))
+	  (a (make-array nn :element-type (array-element-type d))))
+     (loop for i from (- center-bin nh) below (+ center-bin nh)
+	do
+	  (setf (aref a (+ (floor nn 2) i)) (aref d (+ (floor nn 2) i))
+		(aref a (- (floor nn 2) i)) (aref d (- (floor nn 2) i))))
+     a)))
 
 (defparameter *rds*
  (progn ;; cut out +/-2kHz around 57kHz
@@ -201,15 +236,14 @@
 	  (nn (length d))
 	  (center-bin (floor (* 57d3 nn
 				(/ 256d3))))
-	  (n (next-power-of-two
-	      (* bw nn
-		 (/ (* 2 128d3)))))
+	  (n (* bw nn
+		(/ (* 2 128d3))))
 	  (nh (floor n 2))
-	  (a (make-array n :element-type (array-element-type d))))
+	  (a (make-array nn :element-type (array-element-type d))))
      (loop for i from (- center-bin nh) below (+ center-bin nh)
-	and ii from 0 
 	do
-	(setf (aref a ii) (aref d (+ (floor nn 2) i))))
+	  (setf (aref a (+ (floor nn 2) i)) (aref d (+ (floor nn 2) i))
+		(aref a (- (floor nn 2) i)) (aref d (- (floor nn 2) i))))
      a)))
 
 
@@ -225,57 +259,47 @@
 
 
 (length *pilot*)
-(defparameter *pilot*
- (progn ;; cut out +/-2kHz around 19kHz
-   (let* ((bw 4000)
-	  
-	  (d (fftshift (napa-fft:fft *demod-heterodyn*)))
-	  (nn (length d))
-	  (center-bin (floor (* 19d3 nn
-				(/ 256d3))))
-	  (n (next-power-of-two
-	      (* bw nn
-		 (/ (* 2 128d3)))))
-	  (nh (floor n 2))
-	  (a (make-array n :element-type (array-element-type d))))
-     (loop for i from (- center-bin nh) below (+ center-bin nh)
-	and ii from 0 
-	do
-	(setf (aref a ii) (aref d (+ (floor nn 2) i))))
-     a)))
 
+(* 3 156000)
+
+(/ 19000 48f0)
+
+(/ 256000 1187.5)
 #+nil
 (progn ;; print spectrum
- (let ((d *pilot*))
+ (let ((d *pilot3*))
    (with-open-file (s "/dev/shm/o3.dat"
 		      :direction :output
 		      :if-does-not-exist :create
 		      :if-exists :supersede)
      (loop for e across d and i from (- (floor (length d) 2)) do
-	  (format s "~6,3f ~6,3f~%"  i  (log (abs e)))))))
+	  (format s "~6,3f ~6,3f~%"  i  (log (abs (+ .0001 e))))))))
 
 (progn ;; print waveform
- (let ((d (napa-fft:fft (fftshift *pilot*)))
+ (let ((d (napa-fft:fft (fftshift *pilot3*)))
        (f (napa-fft:fft (fftshift *rds*))))
    (with-open-file (s "/dev/shm/o3.dat"
 		      :direction :output
 		      :if-does-not-exist :create
 		      :if-exists :supersede)
-     (loop for pil across d and sig across f and i from 0 do
-	  (let ((sum (complex 0d0))
-		(sums (complex 0d0)))
-	    (incf sum pil)
-	    (incf sums sig)
-	    (when (= 0 (mod i 152))
-	      
-	     (let ((q (/ sig pil)))
-	       (format s "~6,3f ~6,3f~%" i (realpart sums)))
-	     (setf sum (complex 0d0)
-		   sums (complex 0d0)))))
-     #+nil (progn
+     
+     (loop for pil across d and sig across f and i from 0 below 30000 do
+	  (let ((sum (complex 0d0)))
+	    (incf sum (complex (realpart pil) (realpart sig)))
+	    (when (= 0 (mod (+ 215 i) 20))
+	      (format s "~6,3f ~6,3f~%" (realpart sum) (imagpart sum))
+	      (setf sum (complex 0d0)
+		))))
+     #+nil
+     (progn
        (terpri s)
-       (loop for pil across d and sig across f and i from 0 do
-	     (format s "~6,3f ~6,3f~%"  i  (realpart sig)))))))
+       (loop for pil across d and sig across f and i from 0 below 100000 do
+	    (let ((q (complex (realpart pil)
+			      (realpart sig))))
+	      (setf q (/ q (abs q)))
+	      (format s "~6,3f ~6,3f~%"  (realpart q) (imagpart q)
+		     ))
+	    #+nil (format s "~6,3f ~6,3f~%"  i (realpart sig)))))))
 
 
 (time
@@ -300,6 +324,18 @@
 
 #+nil
 (sb-ext:gc :full t)
+
+(defun realpartv (a)
+  (let* ((n (length a))
+	 (r (make-array n :element-type 'double-float)))
+    (dotimes (i n)
+      (setf (aref r i) (realpart (aref a i))))
+    r))
+
+(store-dfloat "/dev/shm/pilot3.dfloat" 
+	      (realpartv (napa-fft:fft (fftshift *pilot3*))))
+(store-dfloat "/dev/shm/rds.dfloat" 
+	      (realpartv (napa-fft:fft (fftshift *rds*))))
 
 
 #+nil
