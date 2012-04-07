@@ -59,7 +59,7 @@
 
 (progn
   (setf *rate* 2048000)
-  (setf *n-complex* (floor (expt 2 22) #+nil 47448064 2))
+  (setf *n-complex* (floor (expt 2 24) #+nil 47448064 2))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -75,7 +75,8 @@
 	  (when (= x y)
 	    (incf x .5))
 	  (setf (aref c i) 
-		(* (exp (complex 0d0 (* (/ (* np2 -507250 ;592750
+		(* (exp (complex 0d0 (* (/ (* np2 ;-507250 
+					      (+ 281 592750)
 					      ) *rate*) (/ (* 2d0 pi) *n-complex*)
 						i)))
 		   (complex (- x 127d0)
@@ -100,7 +101,8 @@
   (fftshift
    (napa-fft:fft *input*)))
 
-(defparameter *spurious-freq*
+#+nil
+(defparameter *spurious-freq* ;; for -507250
   '((-130718.8 900) ;; second number is bandwidth (diameter)
     (-120718.8  500)
     (-119250.0  500)
@@ -115,6 +117,30 @@
     (113593.8  900)
     (123593.8  300)
     (125031.2  500)))
+
+
+(defparameter *spurious-freq* ;; for the right channel
+  '((-153312.8 900) ;; second number is bandwidth (diameter)
+    (-143937 900)
+    (-131625 900)
+    (-121625 500)
+    (-120187.0  500)
+    (-101062 500)
+    (-91187 500)
+    (-89750 500)
+    (-70562 500)
+    (-59250.0  500)
+    (-55250.5  500)
+    (-40000 400)
+    (21000 300)
+    (44875 500)
+    (51562.0  900)
+    (61500.8  500)
+    (62937.8  500)
+    (82187 500)
+    (112687 900)
+    (122562 400)
+    (124062 600)))
 
 
 (defparameter *kin-filt*
@@ -178,6 +204,30 @@
       d))
   (store-dfloat "/dev/shm/demod-heterodyn.dfloat" *demod-heterodyn*)
   nil)
+
+(progn ;; cut out from 0 .. 17kHz (L+R) 
+  (let* ((bw 5000)
+	 (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	 (nn (length d))
+	 (center-bin (floor (* (* .5 bw) nn
+			       (/ 512d3))))
+	 (band-bin-np2 (* 2 bw nn
+			  (/ 512d3)))
+	 (band-bin (next-power-of-two
+		    band-bin-np2))
+	 (nh (floor band-bin 2))
+	 (a (make-array band-bin :element-type (array-element-type d)
+			:initial-element (complex 0d0)
+			)))
+    (format t "~d~%" band-bin)
+    (loop for i from 0 below (floor band-bin 2) and ii from 0
+       do (when (< ii (floor band-bin-np2 2))
+	   (setf (aref a (+ nh ii)) (aref d (+ (floor nn 2) i))
+		 (aref a (- nh ii)) (aref d (+ (floor nn 2) (- band-bin i))))))
+    (store-dfloat 
+     "/dev/shm/mono.dfloat" 
+     (cdf->df (napa-fft:ifft (fftshift a))))
+    nil))
 
 (progn ;; cut out +/-50Hz around 19kHz
   (let* ((bw 100)
@@ -410,13 +460,13 @@
 (with-plot (s "/dev/shm/o.dat")
   (reset-dpll3 (aref *pilot-c* 0))
   (format s "0 0~%")
-  (loop for e across *pilot-c* and i below 30000 do
-       (format s "~f ~9,4f~%" i
-	       (phase (/ (aref *rds-c* (1+ i))
-			 (multiple-value-bind (a b) (dpll3 e)
-			   b))))))
+  (loop for e across *pilot-c* and i below 90000 do
+       (let ((q (/ (aref *rds-c* (1+ i))
+		   (multiple-value-bind (v v3) (dpll3 e)
+		     v3)))) 
+	 (format s "~f ~9,4f~%" i (phase q)))))
 
-
+(/ 256d3 1399)
 
 (progn ;; store both signals in file
   (store-dfloat "/dev/shm/rds.dfloat"
