@@ -159,7 +159,6 @@
   nil)
 
 (let ((old-phi 0d0)
-      (old-phi-cont 0d0)
       (old-filt 0d0)
       (c2 0d0)
       (c1 0d0)
@@ -168,7 +167,6 @@
   (defun reset-dpll (&key (z (complex 0d0))
 		     (f0 -19.1d3) (fs 256d3) (eta .707d0) (fn 5000d0))
     (setf old-phi (phase z)
-	  old-phi-cont old-phi
 	  old-filt 0d0
 	  c2 (* 2 eta (* 2 pi fn) (/ fs))
 	  c1 (/ (expt c2 2)
@@ -184,25 +182,28 @@
 	     (values double-float (complex double-float) &optional))
    (let* ((phi_i (phase z)) ;; PD
 	  (phi_e (- phi_i old-phi))) 
-     ;(format t "~a~%" phi_e)
+    ; (format t "~a~%" phi_e)
      (progn ;; digital filter
        (let* ((top (+ (* c1 phi_e) old-filt))
 	      (bottom (* c2 phi_e))
 	      (filt-out (+ top bottom)))
 	 (setf old-filt top)
-	 (let ((znew  ;; VCO
-		(exp (complex 0 (+ c filt-out old-phi)))))
-	   (setf old-phi (phase znew)
-		 old-phi-cont (+ c filt-out old-phi-cont))
+	 (let* ((znew  ;; VCO
+		 (exp (complex 0 (+ c filt-out old-phi)))))
+	   (setf old-phi (phase znew))
 	   (values 
-	    old-phi-cont
+	    filt-out
 	    znew)))))))
 
 (progn
   (reset-dpll :z (aref *input-filt* 0)
-	      :f0 -509d3 :fs 2048d3 :fn 200d3)
-  (loop for e across *input-filt* and i below 9000 collect
-       (dpll e)))
+	      :f0 -509d3 :fs 2048d3 :fn 170d3)
+  (let* ((n (length *input-filt*))
+	 (a (make-array n :element-type '(complex double-float))))
+    (dotimes (i n)
+      (setf (aref a i) (multiple-value-bind (q b) (dpll (aref *input-filt* i)) 
+			 b)))
+    (store-cdfloat "/dev/shm/track.cdfloat" a)))
 
 
 ;; s = A e^ip
