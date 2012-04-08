@@ -362,15 +362,18 @@
 
 (let ((old-phi 0d0)
       (old-phi1 0d0)
+      (old-phi-cont 0d0)
       (old-filt 0d0))
   (defun reset-dpll3 (&optional (z (complex 0d0)))
     (setf old-phi1 (phase z)
 	  old-phi 0d0
+	  old-phi-cont 0d0
 	  old-filt 0d0))
   (defun dpll3 (z) ;; generate 3 times input frequency
     (declare (type (complex double-float) z)
 	     (values (complex double-float) ;; 19kHz 
 		     (complex double-float) ;; 57kHz
+		     double-float ;; phase
 		     &optional))
    (let* ((f0 (* 3 -19.1d3))
 	  (fs 256d3)
@@ -398,9 +401,12 @@
 		 (znew1 
 		  (exp (complex 0 (+ (/ c 3) filt-out old-phi1)))))
 	     (setf old-phi (phase znew)
+		   old-phi-cont (+ c filt-out old-phi-cont)
 		   old-phi1 (phase znew1))
-	     (values znew1
-		     znew))))))))
+	     (values znew1 ;; complex oscillator 19kHz
+		     znew  ;; complex oscillator 57kHz
+		     old-phi-cont ;; continuous phase of 57kHz oscillator
+		     ))))))))
 
 
 
@@ -459,17 +465,25 @@
 		*rds-c*))
 
 
-(defparameter *bpsk-c*
- (let* ((n (length *pilot-c*))
-	(a (make-array n :element-type '(complex double-float))))
-   (reset-dpll3 (aref *pilot-c* 0))
-   (dotimes (i (1- n))
-     (let ((q (/ (aref *rds-c* (1+ i))
-		 (multiple-value-bind (v v3) (dpll3 (aref *pilot-c* i))
-		   v3)))) 
-       (setf (aref a i) q)))
-   (store-cdfloat "/dev/shm/bpsk.cdfloat" a)
-   a))
+(let* ((n (length *pilot-c*))
+       (a (make-array n :element-type '(complex double-float)))
+       (b (make-array n :element-type 'double-float)))
+  (reset-dpll3 (aref *pilot-c* 0))
+  (dotimes (i (1- n))
+    (let ((q (/ (aref *rds-c* (1+ i))
+		(multiple-value-bind (v v3 ph) (dpll3 (aref *pilot-c* i))
+		  (setf (aref b i) ph)
+		  v3)))) 
+      (setf (aref a i) q)))
+  (store-cdfloat "/dev/shm/bpsk.cdfloat" a)
+  (defparameter *bpsk-c* a)
+  (defparameter *bpsk-57kHz-phase* b))
+#+nil
+(with-plot (s "/dev/shm/o.dat")
+  (let ((old-e 0d0))
+   (loop for e across *bpsk-57kHz-phase* and i below 90000 do
+	(format s "~f ~9,4f~%" i (- e old-e))
+	(setf old-e e))))
 
 (defparameter *deriv-phase-bpsk*
  (let* ((n (length *bpsk-c*))
@@ -485,7 +499,8 @@
 #+nil
 (with-plot (s "/dev/shm/o.dat")
   (loop for e across *deriv-phase-bpsk* and i below 90000 do
-       (format s "~f ~9,4f~%" i e)))
+       
+(format s "~f ~9,4f~%" i e)))
 
 (progn ;; store both signals in file
   (store-dfloat "/dev/shm/rds.dfloat"
@@ -498,3 +513,4 @@
 #+nil
 (sb-ext:gc :full t)
 
+s
