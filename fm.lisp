@@ -82,8 +82,8 @@
 	  (when (= x y)
 	    (incf x .5))
 	  (setf (aref c i) 
-		(* (exp (complex 0d0 (* (/ (* np2 ;-507250 
-					      (+ 281 592750)
+		(* (exp (complex 0d0 (* (/ (* np2 -507250 
+					      ;(+ 281 592750)
 					      ) *rate*) (/ (* 2d0 pi) *n-complex*)
 						i)))
 		   (complex (- x 127d0)
@@ -108,7 +108,7 @@
   (fftshift
    (napa-fft:fft *input*)))
 
-#+nil
+
 (defparameter *spurious-freq* ;; for -507250
   '((-130718.8 900) ;; second number is bandwidth (diameter)
     (-120718.8  500)
@@ -125,7 +125,7 @@
     (123593.8  300)
     (125031.2  500)))
 
-
+#+nil
 (defparameter *spurious-freq* ;; for the right channel
   '((-153312.8 900) ;; second number is bandwidth (diameter)
     (-143937 900)
