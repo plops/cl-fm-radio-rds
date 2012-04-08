@@ -192,18 +192,18 @@
 		 (exp (complex 0 (+ c filt-out old-phi)))))
 	   (setf old-phi (phase znew))
 	   (values 
-	    filt-out
+	    phi_e
 	    znew)))))))
 
 (progn
   (reset-dpll :z (aref *input-filt* 0)
 	      :f0 -509d3 :fs 2048d3 :fn 170d3)
   (let* ((n (length *input-filt*))
-	 (a (make-array n :element-type '(complex double-float))))
+	 (a (make-array n :element-type 'double-float)))
     (dotimes (i n)
       (setf (aref a i) (multiple-value-bind (q b) (dpll (aref *input-filt* i)) 
-			 b)))
-    (store-cdfloat "/dev/shm/track.cdfloat" a)))
+			 q)))
+    (store-dfloat "/dev/shm/track.dfloat" a)))
 
 
 ;; s = A e^ip
