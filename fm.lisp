@@ -1,4 +1,4 @@
-(eval-when (:compile-toplevel)
+(eval-when (:compile-toplevel :execute)
  (ql:quickload "napa-fft3"))
 
 (defun next-power-of-two (n)
@@ -64,9 +64,10 @@
 (defparameter *n-complex* 0)
 (defparameter *input* 0)
 
-(progn
+#+nil
+(progn ;; shift frequency to baseband
   (setf *rate* 2048000)
-  (setf *n-complex* (floor (expt 2 24) #+nil 47448064 2))
+  (setf *n-complex* (floor (expt 2 18)))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -79,7 +80,7 @@
       (dotimes (i (floor n 2))
 	(let ((x  (aref a (* 2 i)))
 	      (y  (aref a (1+ (* 2 i)))))
-	  (when (= x y)
+	 #+nil (when (= x y)
 	    (incf x .5))
 	  (setf (aref c i) 
 		(* (exp (complex 0d0 (* (/ (* np2 -507250 
@@ -89,6 +90,29 @@
 		   (complex (- x 127d0)
 			    (- y 127d0))))))
       c)))
+
+
+
+(progn
+  (setf *rate* 2048000)
+  (setf *n-complex* (floor (expt 2 18)))
+  (defparameter *input*
+    (let* ((n (* 2 *n-complex*))
+	   (a (make-array n :element-type '(unsigned-byte 8)))
+	   (np2 (next-power-of-two (floor n 2)))
+	   (c (make-array np2
+			  :element-type '(complex double-float))))
+      (with-open-file (s "/home/martin/Downloads2/dl2048000.fm"
+			 :element-type '(unsigned-byte 8))
+	(read-sequence a s))
+      (dotimes (i (floor n 2))
+	(let ((x  (aref a (* 2 i)))
+	      (y  (aref a (1+ (* 2 i)))))
+	  (setf (aref c i) 
+		(complex (- x 127d0)
+			 (- y 127d0)))))
+      c))
+  (store-cdfloat "/dev/shm/input.cdf" *input*))
 
 (defun fftshift (a)
   (let* ((n (length a))
@@ -108,79 +132,23 @@
   (fftshift
    (napa-fft:fft *input*)))
 
-
-(defparameter *spurious-freq* ;; for -507250
-  '((-130718.8 900) ;; second number is bandwidth (diameter)
-    (-120718.8  500)
-    (-119250.0  500)
-    (-69625.0  530)
-    (-59625.0  500)
-    (-58187.5  500)
-    (-16250.0  500)
-    (52500.0  500)
-    (62500.0  400)
-    (63968.8  500)
-    (82843.8  500)
-    (113593.8  900)
-    (123593.8  300)
-    (125031.2  500)))
-
-#+nil
-(defparameter *spurious-freq* ;; for the right channel
-  '((-153312.8 900) ;; second number is bandwidth (diameter)
-    (-143937 900)
-    (-131625 900)
-    (-121625 500)
-    (-120187.0  500)
-    (-101062 500)
-    (-91187 500)
-    (-89750 500)
-    (-70562 500)
-    (-59250.0  500)
-    (-55250.5  500)
-    (-40000 400)
-    (21000 300)
-    (44875 500)
-    (51562.0  900)
-    (61500.8  500)
-    (62937.8  500)
-    (82187 500)
-    (112687 900)
-    (122562 400)
-    (124062 600)))
-
-
 (defparameter *kin-filt*
   (let* ((n (length *kin*))
 	 (nh (floor n 2))
-	 
-	 (bw (floor (* n 160000) ;; bandpass +/- 160kHz
+	 (center-bin (/ (* n -507250)
+			*rate*))
+	 (bw (floor (* n 80000) ;; bandpass +/- 160kHz
 		    *rate*))
-	 (n-small (next-power-of-two (* 2 bw))
-	   )
-	 (bww (floor n-small 2))
-	 (res (make-array n-small :element-type (array-element-type *kin*)
+	 (res (make-array n :element-type (array-element-type *kin*)
 			  :initial-element (complex .0d0))))
-    (format t "2*bw=~6,2f bww=~d n-small=~d~%" bw bww n-small)
-    (loop for i from (+ (- bww) nh)
-       below (+ bww nh) and ii from 0
+    (loop for i
+       from (+ (- bw) nh center-bin)
+       below (+ bw nh center-bin)        
        do
-	 (setf (aref res ii) (if (< (- nh bw) i (+ nh bw))
-				 (aref *kin* i)
-				 (complex 0d0))))
-    (loop for (c bw) in *spurious-freq* do
-	 (let ((bw-bin (floor (* 2 n-small bw) ;; radius but i have to increase it
-			      (* 2 *rate*)))
-	       (c-bin (floor (* n c)
-			     *rate*)))
-	   
-	   (let ((pos (+ (floor n-small 2)
-			 c-bin)))
-	     (loop for i from (- pos bw-bin)
-	       upto (+ pos bw-bin) do
-		  (when (<= 0 i (1- n-small))
-		   (setf (aref res i) (complex 0d0)))))))
+	 (setf (aref res i) (aref *kin* i)))
     res))
+
+
 
 (progn ;; reverse ft
   (defparameter *input-filt*
@@ -189,6 +157,52 @@
   (store-cdfloat "/dev/shm/kin-filt.cdfload"
 		 *input-filt*)
   nil)
+
+(let ((old-phi 0d0)
+      (old-phi-cont 0d0)
+      (old-filt 0d0)
+      (c2 0d0)
+      (c1 0d0)
+      (c 0d0))
+  (declare (type double-float old-phi old-filt c2 c1 c))
+  (defun reset-dpll (&key (z (complex 0d0))
+		     (f0 -19.1d3) (fs 256d3) (eta .707d0) (fn 5000d0))
+    (setf old-phi (phase z)
+	  old-phi-cont old-phi
+	  old-filt 0d0
+	  c2 (* 2 eta (* 2 pi fn) (/ fs))
+	  c1 (/ (expt c2 2)
+		(* 4 (expt eta 2)))
+	  c (/ (* 2 pi f0) 
+	       fs))
+    (unless (and (< 0 c1)
+		 (< (- (* 2 c2) 4) c1 c2))
+      (error "filter parameters are not stable")))
+  (defun dpll (z)
+    (declare (type (complex double-float) z)
+	     (optimize speed)
+	     (values double-float (complex double-float) &optional))
+   (let* ((phi_i (phase z)) ;; PD
+	  (phi_e (- phi_i old-phi))) 
+     ;(format t "~a~%" phi_e)
+     (progn ;; digital filter
+       (let* ((top (+ (* c1 phi_e) old-filt))
+	      (bottom (* c2 phi_e))
+	      (filt-out (+ top bottom)))
+	 (setf old-filt top)
+	 (let ((znew  ;; VCO
+		(exp (complex 0 (+ c filt-out old-phi)))))
+	   (setf old-phi (phase znew)
+		 old-phi-cont (+ c filt-out old-phi-cont))
+	   (values 
+	    old-phi-cont
+	    znew)))))))
+
+(progn
+  (reset-dpll :z (aref *input-filt* 0)
+	      :f0 -509d3 :fs 2048d3 :fn 200d3)
+  (loop for e across *input-filt* and i below 9000 collect
+       (dpll e)))
 
 
 ;; s = A e^ip
@@ -327,39 +341,7 @@
 		       :if-does-not-exist :create)
        ,@body)))
 
-(let ((old-phi 0d0)
-      (old-filt 0d0))
-  (defun reset-dpll (&optional (z (complex 0d0)))
-    (setf old-phi (phase z)
-	  old-filt 0d0))
- (defun dpll (z)
-   (declare (type (complex double-float) z)
-	    (values (complex double-float) &optional))
-   (let* ((f0 -19.1d3)
-	  (fs 256d3)
-	  (eta .707d0)
-	  (fn 5000d0)
-	  (omega_n (* 2 pi fn))
-	  (c2 (* 2 eta omega_n (/ fs)))
-	  (c1 (/ (expt c2 2)
-		 (* 4 (expt eta 2))))
-	  (c (/ (* 2 pi f0) 
-		fs)))
-     (unless (and (< 0 c1)
-		  (< (- (* 2 c2) 4) c1 c2))
-       (error "filter parameters are not stable"))
-     (let* ((phi_i (phase z)) ;; PD
-	    (phi_e (- phi_i old-phi))) 
-       (format t "~a~%" phi_e)
-       (progn ;; digital filter
-	 (let* ((top (+ (* c1 phi_e) old-filt))
-		(bottom (* c2 phi_e))
-		(filt-out (+ top bottom)))
-	   (setf old-filt top)
-	   (let ((znew  ;; VCO
-		  (exp (complex 0 (+ c filt-out old-phi)))))
-	     (setf old-phi (phase znew))
-	     znew)))))))
+
 
 (let ((old-phi 0d0)
       (old-phi1 0d0)
