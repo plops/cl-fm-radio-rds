@@ -53,6 +53,12 @@
      (write-sequence o s)))
   (values))
 
+(defun cdf->df (a)
+  (let ((b (make-array (length a) :element-type 'double-float)))
+    (dotimes (i (length a))
+      (setf (aref b i) (realpart (aref a i))))
+    b))
+
 (defparameter *rate* 0)
 (defparameter *n-complex* 0)
 (defparameter *input* 0)
@@ -267,11 +273,7 @@
      (napa-fft:ifft (fftshift a)))
     nil))
 
-(defun cdf->df (a)
-  (let ((b (make-array (length a) :element-type 'double-float)))
-    (dotimes (i (length a))
-      (setf (aref b i) (realpart (aref a i))))
-    b))
+
 
 (defparameter *pilot*
    (progn ;; cut out +/-50Hz around 19kHz, but leave at 19kHz
@@ -385,7 +387,7 @@
        (error "filter parameters are not stable"))
      (let* ((phi_i (phase z)) ;; PD
 	    (phi_e (- phi_i old-phi1))) 
-       (format t "~a~%" phi_e)
+       ;(format t "~a~%" phi_e)
        (progn ;; digital filter
 	 (let* ((top (+ (* c1 phi_e) old-filt))
 		(bottom (* c2 phi_e))
@@ -456,17 +458,34 @@
  (store-cdfloat "/dev/shm/rds.cdfloat"
 		*rds-c*))
 
+
+(defparameter *bpsk-c*
+ (let* ((n (length *pilot-c*))
+	(a (make-array n :element-type '(complex double-float))))
+   (reset-dpll3 (aref *pilot-c* 0))
+   (dotimes (i (1- n))
+     (let ((q (/ (aref *rds-c* (1+ i))
+		 (multiple-value-bind (v v3) (dpll3 (aref *pilot-c* i))
+		   v3)))) 
+       (setf (aref a i) q)))
+   (store-cdfloat "/dev/shm/bpsk.cdfloat" a)
+   a))
+
+(defparameter *deriv-phase-bpsk*
+ (let* ((n (length *bpsk-c*))
+	(a (make-array n :element-type 'double-float)))
+   (dotimes (i (1- n))
+     (let* ((o (aref *bpsk-c* i))
+	    (n (aref *bpsk-c* (1+ i))) 
+	    (q (- n o))) 
+       (setf (aref a i) (imagpart (/ q o)))))
+   (store-dfloat "/dev/shm/deriv-phase-bpsk.dfloat" a)
+   a))
+
 #+nil
 (with-plot (s "/dev/shm/o.dat")
-  (reset-dpll3 (aref *pilot-c* 0))
-  (format s "0 0~%")
-  (loop for e across *pilot-c* and i below 90000 do
-       (let ((q (/ (aref *rds-c* (1+ i))
-		   (multiple-value-bind (v v3) (dpll3 e)
-		     v3)))) 
-	 (format s "~f ~9,4f~%" i (phase q)))))
-
-(/ 256d3 1399)
+  (loop for e across *deriv-phase-bpsk* and i below 90000 do
+       (format s "~f ~9,4f~%" i e)))
 
 (progn ;; store both signals in file
   (store-dfloat "/dev/shm/rds.dfloat"
