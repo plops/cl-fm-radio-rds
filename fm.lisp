@@ -1,4 +1,5 @@
-(ql:quickload "napa-fft3")
+(eval-when (:compile-toplevel)
+ (ql:quickload "napa-fft3"))
 
 (defun next-power-of-two (n)
   (let ((p 2))
@@ -465,6 +466,8 @@
 		*rds-c*))
 
 
+(defparameter *bpsk-c* nil)
+
 (let* ((n (length *pilot-c*))
        (a (make-array n :element-type '(complex double-float)))
        (b (make-array n :element-type 'double-float)))
@@ -477,13 +480,31 @@
       (setf (aref a i) q)))
   (store-cdfloat "/dev/shm/bpsk.cdfloat" a)
   (defparameter *bpsk-c* a)
-  (defparameter *bpsk-57kHz-phase* b))
+  (defparameter *bpsk-57kHz-phase* b)
+  )
+
+#+nil
+(with-plot (str "/dev/shm/o.dat")
+ (let ((baud-old 0))
+   (loop 
+      for x across *bpsk-57kHz-phase*
+      and dy across *deriv-phase-bpsk*
+      and y across *bpsk-c* 
+      and i below 9000
+      do
+	(let* ((baud (+ .5 (/ x (* 2 pi 48))))
+	      (fbaud (floor baud)))
+	  (progn ;unless (= fbaud (floor baud-old))
+	   (format str "~9,4f ~9,5f~%" baud dy ;(phase y);dx
+		   ))
+	  (setf baud-old baud)))))
 #+nil
 (with-plot (s "/dev/shm/o.dat")
   (let ((old-e 0d0))
    (loop for e across *bpsk-57kHz-phase* and i below 90000 do
 	(format s "~f ~9,4f~%" i (- e old-e))
 	(setf old-e e))))
+
 
 (defparameter *deriv-phase-bpsk*
  (let* ((n (length *bpsk-c*))
@@ -508,9 +529,5 @@
   (store-dfloat "/dev/shm/pilot.dfloat"
 		*pilot*))
 
-
-
 #+nil
 (sb-ext:gc :full t)
-
-s
