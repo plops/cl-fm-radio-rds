@@ -64,38 +64,9 @@
 (defparameter *n-complex* 0)
 (defparameter *input* 0)
 
-#+nil
-(progn ;; shift frequency to baseband
+(progn ;; read in file
   (setf *rate* 2048000)
-  (setf *n-complex* (floor (expt 2 18)))
-  (defparameter *input*
-    (let* ((n (* 2 *n-complex*))
-	   (a (make-array n :element-type '(unsigned-byte 8)))
-	   (np2 (next-power-of-two (floor n 2)))
-	   (c (make-array np2
-			  :element-type '(complex double-float))))
-      (with-open-file (s "/home/martin/Downloads2/dl2048000.fm"
-			 :element-type '(unsigned-byte 8))
-	(read-sequence a s))
-      (dotimes (i (floor n 2))
-	(let ((x  (aref a (* 2 i)))
-	      (y  (aref a (1+ (* 2 i)))))
-	 #+nil (when (= x y)
-	    (incf x .5))
-	  (setf (aref c i) 
-		(* (exp (complex 0d0 (* (/ (* np2 -507250 
-					      ;(+ 281 592750)
-					      ) *rate*) (/ (* 2d0 pi) *n-complex*)
-						i)))
-		   (complex (- x 127d0)
-			    (- y 127d0))))))
-      c)))
-
-
-
-(progn
-  (setf *rate* 2048000)
-  (setf *n-complex* (floor (expt 2 24)))
+  (setf *n-complex* (floor (expt 2 22)))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -137,15 +108,23 @@
 	 (nh (floor n 2))
 	 (center-bin (/ (* n -507250)
 			*rate*))
-	 (bw (floor (* n 80000) ;; bandpass +/- 160kHz
+	 (bw (floor (* n 120000) ;; bandpass +/- 60kHz
 		    *rate*))
-	 (res (make-array n :element-type (array-element-type *kin*)
+	 (small-n (* 2
+		     2 ;; oversample for pll
+		     (next-power-of-two bw)))
+	 (res (make-array small-n :element-type (array-element-type *kin*)
 			  :initial-element (complex .0d0))))
+    (defparameter *small-rate* (/ (* small-n *rate*)
+				  n))
+    (format t "smaller rate ~12,4f Hz~%" *small-rate*)
     (loop for i
-       from (+ (- bw) nh center-bin)
-       below (+ bw nh center-bin) and ii from (- nh bw)        
+       from  (- bw)
+       below bw 
+       and ii from (- (floor small-n 2)
+		      bw)
        do
-	 (setf (aref res ii) (aref *kin* i)))
+	 (setf (aref res ii) (aref *kin* (+ i nh center-bin))))
     res))
 
 
@@ -203,18 +182,15 @@
 
 (progn
   (reset-dpll :z (aref *input-filt* 0)
-	      :f0 100d0 :fs 2048d3 :fn 60d3)
+	      :f0 100d0 :fs *small-rate* :fn 60d3)
   (let* ((n (length *input-filt*))
-	 (ac (make-array n :element-type '(complex double-float)))
 	 (a (make-array n :element-type 'double-float)))
     (dotimes (i n)
 	 (multiple-value-bind (q b) (dpll (aref *input-filt* i)) 
-	   (setf (aref ac i) b
-		 (aref a i) q)))
+	   (setf (aref a i) q)))
 
-    (store-dfloat "/dev/shm/track.dfloat" a)
-    (defparameter *track* ac)
-    (store-cdfloat "/dev/shm/track.cdfloat" ac)))
+    (store-dfloat "/dev/shm/demod-pll.dfloat" a)
+    (defparameter *demod-pll* a)))
 
 
 ;; s = A e^ip
@@ -241,25 +217,27 @@
   (store-dfloat "/dev/shm/demod-heterodyn.dfloat" *demod-heterodyn*)
   nil)
 
+
+#+nil
 (progn ;; cut out from 0 .. 17kHz (L+R) 
-  (let* ((bw 5000)
+  (let* ((bw 16700)
 	 (d (fftshift (napa-fft:fft *demod-heterodyn*)))
 	 (nn (length d))
 	 (center-bin (floor (* (* .5 bw) nn
-			       (/ 512d3))))
-	 (band-bin-np2 (* 2 bw nn
-			  (/ 512d3)))
-	 (band-bin (next-power-of-two
-		    band-bin-np2))
-	 (nh (floor band-bin 2))
-	 (a (make-array band-bin :element-type (array-element-type d)
+			       (/ 2048d3))))
+	 (band-bin (* bw nn
+		      (/ 2048d3)))
+	 (band-bin-pow (next-power-of-two
+			band-bin))
+	 (nh (floor band-bin-pow 2))
+	 (a (make-array band-bin-pow :element-type (array-element-type d)
 			:initial-element (complex 0d0)
 			)))
-    (format t "~d~%" band-bin)
-    (loop for i from 0 below (floor band-bin 2) and ii from 0
-       do (when (< ii (floor band-bin-np2 2))
-	   (setf (aref a (+ nh ii)) (aref d (+ (floor nn 2) i))
-		 (aref a (- nh ii)) (aref d (+ (floor nn 2) (- band-bin i))))))
+    (format t "~d~%" band-bin-pow)
+    (loop for i from 0 below band-bin and ii from 0
+       do (setf ;(aref a (+ nh ii)) (aref d (+ (floor nn 2) i))
+	   (aref a (- nh ii)) (aref d (- (floor nn 2) i))
+		))
     (store-dfloat 
      "/dev/shm/mono.dfloat" 
      (cdf->df (napa-fft:ifft (fftshift a))))
@@ -267,39 +245,39 @@
 
 (progn ;; cut out +/-50Hz around 19kHz
   (let* ((bw 100)
-	 (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	 (d (fftshift (napa-fft:fft *demod-pll*)))
 	 (nn (length d))
 	 (center-bin (floor (* 19d3 nn
-			       (/ 512d3))))
+			       (/ 2048d3))))
 	 (band-bin (next-power-of-two
 		    (* bw nn
-		       (/ 512d3))))
+		       (/ 2048d3))))
 	 (nh (floor band-bin 2))
 	 (a (make-array (floor band-bin) :element-type (array-element-type d))))
     (loop for i from (- center-bin nh) below (+ center-bin nh) and ii from 0
        do
 	 (setf (aref a ii) (aref d (+ (floor nn 2) i))))
     (store-cdfloat 
-     (format nil "/dev/shm/pilot~6,3f.cdfloat" (* band-bin 512d3 (/ nn))) 
+     (format nil "/dev/shm/pilot~6,3f.cdfloat" (* band-bin 2048d3 (/ nn))) 
      (napa-fft:ifft (fftshift a)))
     nil))
 
 (progn ;; cut out +/-2000Hz around 57kHz
   (let* ((bw 4000)
-	 (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	 (d (fftshift (napa-fft:fft *demod-pll*)))
 	 (nn (length d))
 	 (center-bin (floor (* 57d3 nn
-			       (/ 512d3))))
+			       (/ 2048d3))))
 	 (band-bin (next-power-of-two
 		    (* bw nn
-		       (/ 512d3))))
+		       (/ 2048d3))))
 	 (nh (floor band-bin 2))
 	 (a (make-array (floor band-bin) :element-type (array-element-type d))))
     (loop for i from (- center-bin nh) below (+ center-bin nh) and ii from 0
        do
 	 (setf (aref a ii) (aref d (+ (floor nn 2) i))))
     (store-cdfloat 
-     (format nil "/dev/shm/rds~6,3f.cdfloat" (* band-bin 512d3 (/ nn))) 
+     (format nil "/dev/shm/rds~6,3f.cdfloat" (* band-bin 2048d3 (/ nn))) 
      (napa-fft:ifft (fftshift a)))
     nil))
 
@@ -308,13 +286,13 @@
 (defparameter *pilot*
    (progn ;; cut out +/-50Hz around 19kHz, but leave at 19kHz
      (let* ((bw 100)
-	    (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	    (d (fftshift (napa-fft:fft *demod-pll*)))
 	    (nn (length d))
 	    (nh (floor nn 2))
 	    (center-bin (floor (* 19d3 nn
-				  (/ 512d3))))
+				  (/ 2048d3))))
 	    (band-bin (floor (* bw nn
-				(/ 512d3))
+				(/ 2048d3))
 			     2))
 	    (a (make-array nn :element-type (array-element-type d))))
        (loop for i from (- center-bin band-bin)
@@ -328,13 +306,13 @@
  (defparameter *pilot-c* 
    (progn ;; cut out +/-50Hz around 19kHz, leave at 19kHz but single side band
      (let* ((bw 100)
-	    (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	    (d (fftshift (napa-fft:fft *demod-pll*)))
 	    (nn (length d))
 	    (nh (floor nn 2))
 	    (center-bin (floor (* 19d3 nn
-				  (/ 512d3))))
+				  (/ 2048d3))))
 	    (band-bin (floor (* bw nn
-				(/ 512d3))
+				(/ 2048d3))
 			     2))
 	    (a (make-array nh :element-type (array-element-type d))))
        (loop for i from (- center-bin band-bin)
@@ -443,14 +421,14 @@
 (progn
  (defparameter *rds-c* 
    (progn ;; cut out +/-50Hz around 19kHz, leave at 19kHz but single side band
-     (let* ((bw 9000)
-	    (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+     (let* ((bw 4000)
+	    (d (fftshift (napa-fft:fft *demod-pll*)))
 	    (nn (length d))
 	    (nh (floor nn 2))
 	    (center-bin (floor (* 57d3 nn
-				  (/ 512d3))))
+				  (/ 2048d3))))
 	    (band-bin (floor (* bw nn
-				(/ 512d3))
+				(/ 2048d3))
 			     2))
 	    (a (make-array nh :element-type (array-element-type d))))
        (loop for i from (- center-bin band-bin)
