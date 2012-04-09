@@ -285,20 +285,22 @@
 #+nil
 (with-plot (s "/dev/shm/o.dat")
   (reset-dpll3 :z (aref *pilot-c* 10000)
-	      ; :z3 (aref *rds-c* 0)
+	       :z3 (aref *rds-c* 10000)
 	       :f0 (* 2 -19d3)
 	       :divider 3d0
 	       :fs *small-rate*
 	       :fn 50d0)
   (loop for i from 10000 below 17000 do
        (let ((e (aref *pilot-c* i))
-	     (e-next (aref *pilot-c* (1+ i))))
+	     (e-next (aref *pilot-c* (1+ i)))
+	     (r-next (aref *rds-c* (1+ i))))
 	(multiple-value-bind (phi er z z3) (dpll3 e)
 	  (format s "~f ~f ~f ~f ~f~%" i 
-		  (realpart (/ e-next
-			       (abs e-next)))
-		  (realpart z)
-		  (realpart z3) (* 1d4 er))))))
+		  (realpart (/ r-next
+			       (abs r-next)))
+		  (phase (/ r-next z3))
+		  (realpart z3) 
+		  (* 1d4 er))))))
 
 
 (defparameter *bpsk-c* nil)
