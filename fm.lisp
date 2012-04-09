@@ -66,7 +66,7 @@
 
 (progn ;; read in file
   (setf *rate* 2048000)
-  (setf *n-complex* (floor (expt 2 24)))
+  (setf *n-complex* (floor (expt 2 26)))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -112,7 +112,7 @@
 	 (bw (floor (* n 180000) ;; bandpass +/- 90kHz
 		    *rate*))
 	 (small-n (* 2
-		     2 ;; maybe oversample for later pll application
+		     1 ;; maybe oversample for later pll application
 		     (next-power-of-two bw)))
 	 (res (make-array small-n :element-type (array-element-type *kin*)
 			  :initial-element (complex .0d0))))
