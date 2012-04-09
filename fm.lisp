@@ -66,7 +66,7 @@
 
 (progn ;; read in file
   (setf *rate* 2048000)
-  (setf *n-complex* (floor (expt 2 22)))
+  (setf *n-complex* (floor (expt 2 24)))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -111,7 +111,7 @@
 	 (bw (floor (* n 120000) ;; bandpass +/- 60kHz
 		    *rate*))
 	 (small-n (* 2
-		     2 ;; oversample for pll
+		     4 ;; oversample for later pll application
 		     (next-power-of-two bw)))
 	 (res (make-array small-n :element-type (array-element-type *kin*)
 			  :initial-element (complex .0d0))))
@@ -127,8 +127,6 @@
 	 (setf (aref res ii) (aref *kin* (+ i nh center-bin))))
     res))
 
-
-
 (progn ;; reverse ft
   (defparameter *input-filt*
     (napa-fft:ifft
@@ -137,60 +135,6 @@
 		 *input-filt*)
   nil)
 
-(let ((old-phi 0d0)
-      (old-filt 0d0)
-      (c2 0d0)
-      (c1 0d0)
-      (c 0d0))
-  (declare (type double-float old-phi old-filt c2 c1 c))
-  (defun reset-dpll (&key (z (complex 0d0))
-		     (f0 -19.1d3) (fs 256d3) (eta .707d0) (fn 5000d0))
-    (setf old-phi (phase z)
-	  old-filt 0d0
-	  c2 (* 2 eta (* 2 pi fn) (/ fs))
-	  c1 (/ (expt c2 2)
-		(* 4 (expt eta 2)))
-	  c (/ (* 2 pi f0) 
-	       fs))
-    (unless (and (< 0 c1)
-		 (< (- (* 2 c2) 4) c1 c2))
-      (error "filter parameters are not stable")))
-  (defun dpll (z)
-    (declare (type (complex double-float) z)
-	     (optimize speed)
-	     (values double-float (complex double-float) &optional))
-   (let* ((phi_i (phase z)) ;; PD
-	  (phi_e (- phi_i old-phi)))
-     
-     (if (< phi_e (* .9 -2d0 pi)) ;; phase unwrapping
-       (incf phi_e (* 2 pi))
-       (if (<  (* .9 2d0 pi) phi_e)
-	   (decf phi_e (* 2 pi))))
-     
-    ; (format t "~a~%" phi_e)
-     (progn ;; digital filter
-       (let* ((top (+ (* c1 phi_e) old-filt))
-	      (bottom (* c2 phi_e))
-	      (filt-out (+ top bottom)))
-	 (setf old-filt top)
-	 (let* ((znew  ;; VCO
-		 (exp (complex 0 (+ c filt-out old-phi)))))
-	   (setf old-phi (phase znew))
-	   (values 
-	    filt-out
-	    znew)))))))
-
-(progn
-  (reset-dpll :z (aref *input-filt* 0)
-	      :f0 100d0 :fs *small-rate* :fn 60d3)
-  (let* ((n (length *input-filt*))
-	 (a (make-array n :element-type 'double-float)))
-    (dotimes (i n)
-	 (multiple-value-bind (q b) (dpll (aref *input-filt* i)) 
-	   (setf (aref a i) q)))
-
-    (store-dfloat "/dev/shm/demod-pll.dfloat" a)
-    (defparameter *demod-pll* a)))
 
 
 ;; s = A e^ip
@@ -218,227 +162,143 @@
   nil)
 
 
-#+nil
-(progn ;; cut out from 0 .. 17kHz (L+R) 
-  (let* ((bw 16700)
-	 (d (fftshift (napa-fft:fft *demod-heterodyn*)))
-	 (nn (length d))
-	 (center-bin (floor (* (* .5 bw) nn
-			       (/ 2048d3))))
-	 (band-bin (* bw nn
-		      (/ 2048d3)))
-	 (band-bin-pow (next-power-of-two
-			band-bin))
-	 (nh (floor band-bin-pow 2))
-	 (a (make-array band-bin-pow :element-type (array-element-type d)
-			:initial-element (complex 0d0)
-			)))
-    (format t "~d~%" band-bin-pow)
-    (loop for i from 0 below band-bin and ii from 0
-       do (setf ;(aref a (+ nh ii)) (aref d (+ (floor nn 2) i))
-	   (aref a (- nh ii)) (aref d (- (floor nn 2) i))
-		))
-    (store-dfloat 
-     "/dev/shm/mono.dfloat" 
-     (cdf->df (napa-fft:ifft (fftshift a))))
-    nil))
-
-(progn ;; cut out +/-50Hz around 19kHz
-  (let* ((bw 100)
-	 (d (fftshift (napa-fft:fft *demod-pll*)))
-	 (nn (length d))
-	 (center-bin (floor (* 19d3 nn
-			       (/ 2048d3))))
-	 (band-bin (next-power-of-two
-		    (* bw nn
-		       (/ 2048d3))))
-	 (nh (floor band-bin 2))
-	 (a (make-array (floor band-bin) :element-type (array-element-type d))))
-    (loop for i from (- center-bin nh) below (+ center-bin nh) and ii from 0
-       do
-	 (setf (aref a ii) (aref d (+ (floor nn 2) i))))
-    (store-cdfloat 
-     (format nil "/dev/shm/pilot~6,3f.cdfloat" (* band-bin 2048d3 (/ nn))) 
-     (napa-fft:ifft (fftshift a)))
-    nil))
-
-(progn ;; cut out +/-2000Hz around 57kHz
-  (let* ((bw 4000)
-	 (d (fftshift (napa-fft:fft *demod-pll*)))
-	 (nn (length d))
-	 (center-bin (floor (* 57d3 nn
-			       (/ 2048d3))))
-	 (band-bin (next-power-of-two
-		    (* bw nn
-		       (/ 2048d3))))
-	 (nh (floor band-bin 2))
-	 (a (make-array (floor band-bin) :element-type (array-element-type d))))
-    (loop for i from (- center-bin nh) below (+ center-bin nh) and ii from 0
-       do
-	 (setf (aref a ii) (aref d (+ (floor nn 2) i))))
-    (store-cdfloat 
-     (format nil "/dev/shm/rds~6,3f.cdfloat" (* band-bin 2048d3 (/ nn))) 
-     (napa-fft:ifft (fftshift a)))
-    nil))
-
-
-
-(defparameter *pilot*
-   (progn ;; cut out +/-50Hz around 19kHz, but leave at 19kHz
-     (let* ((bw 100)
-	    (d (fftshift (napa-fft:fft *demod-pll*)))
-	    (nn (length d))
-	    (nh (floor nn 2))
-	    (center-bin (floor (* 19d3 nn
-				  (/ 2048d3))))
-	    (band-bin (floor (* bw nn
-				(/ 2048d3))
-			     2))
-	    (a (make-array nn :element-type (array-element-type d))))
-       (loop for i from (- center-bin band-bin)
-	  below (+ center-bin band-bin)
-	  do
-	  (setf (aref a (+ nh i)) (aref d (+ nh i))
-		(aref a (- nh i)) (aref d (- nh i))))
-       (cdf->df (napa-fft:ifft (fftshift a))))))
 
 (progn
- (defparameter *pilot-c* 
-   (progn ;; cut out +/-50Hz around 19kHz, leave at 19kHz but single side band
-     (let* ((bw 100)
-	    (d (fftshift (napa-fft:fft *demod-pll*)))
-	    (nn (length d))
-	    (nh (floor nn 2))
-	    (center-bin (floor (* 19d3 nn
-				  (/ 2048d3))))
-	    (band-bin (floor (* bw nn
-				(/ 2048d3))
-			     2))
-	    (a (make-array nh :element-type (array-element-type d))))
-       (loop for i from (- center-bin band-bin)
-	  below (+ center-bin band-bin) and ii from (- band-bin)
-	  do
-	  (setf (aref a (+ (floor nh 2) center-bin ii)) (aref d (+ nh i))))
-       (napa-fft:ifft (fftshift a)))))
- (store-cdfloat "/dev/shm/pilot.cdfloat"
-		*pilot-c*))
+  (defparameter *pilot-c* 
+    (progn ;; cut out +/-50Hz around 19kHz, leave at 19kHz but single side band
+      (let* ((bw 100)
+	     (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	     (nn (length d))
+	     (nh (floor nn 2))
+	     (center-bin (floor (* 19d3 nn
+				   (/ *small-rate*))))
+	     (band-bin (floor (* bw nn
+				 (/ *small-rate*))
+			      2))
+	     (a (make-array nh :element-type '(complex double-float))))
+	(loop for i from (- center-bin band-bin)
+	   below (+ center-bin band-bin) and ii from (- band-bin)
+	   do
+	     (setf (aref a (+ (floor nh 2) center-bin ii)) (aref d (+ nh i))))
+	(napa-fft:ifft (fftshift a)))))
+  (store-cdfloat "/dev/shm/pilot.cdfloat"
+		 *pilot-c*))
+
+(time
+ (progn
+   (defparameter *rds-c* 
+     (progn ;; cut out +/-2000Hz around 57kHz, leave at 57kHz but single side band
+       (let* ((bw 4000)
+	      (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	      (nn (length d))
+	      (nh (floor nn 2))
+	      (center-bin (floor (* 57d3 nn
+				    (/ *small-rate*))))
+	      (band-bin (floor (* bw nn
+				  (/ *small-rate*))
+			       2))
+	      (a (make-array nh :element-type '(complex double-float))))
+	 (loop for i from (- center-bin band-bin)
+	    below (+ center-bin band-bin) and ii from (- band-bin)
+	    do
+	    (setf (aref a (+ (floor nh 2) center-bin ii)) (aref d (+ nh i))))
+	 (napa-fft:ifft (fftshift a)))))
+   (store-cdfloat "/dev/shm/rds.cdfloat"
+		  *pilot-c*)))
+
+
+
+(let ((old-phi 0d0)
+      (old-phi3-cont 0d0)
+      (old-phi3 0d0)
+      (old-filt 0d0)
+      (divider/ 1d0)
+      (c2 0d0)
+      (c1 0d0)
+      (c 0d0))
+  (declare (type double-float old-phi old-phi3 
+		 old-phi3-cont old-filt c2 c1 
+		 c divider/))
+  (defun reset-dpll3 (&key (z (complex 0d0)) (z3 (complex 0d0))
+		      (f0 -19.0d3)
+		      (divider 1d0)
+		      (fs 256d3) (eta .707d0) (fn 5000d0))
+    (setf old-phi (phase z)
+	  old-phi3 (phase z3)
+	  old-phi3-cont old-phi3
+	  old-filt 0d0
+	  divider/ (/ divider)
+	  c2 (* 2 eta (* 2 pi fn) (/ fs))
+	  c1 (/ (expt c2 2)
+		(* 4 (expt eta 2)))
+	  c (/ (* 2 pi (* divider f0)) 
+	       fs))
+    (unless (and (< 0 c1)
+		 (< (- (* 2 c2) 4) c1 c2))
+      (error "filter parameters are not stable")))
+  (defun dpll3 (z)
+    (declare (type (complex double-float) z)
+	     (optimize speed)
+	     (values double-float 
+		     double-float
+		     (complex double-float) 
+		     (complex double-float) &optional))
+   (let* ((phi_i (phase z)) ;; PD
+	  (phi_e (- phi_i old-phi)))
+     
+     (if (< phi_e (* .9 -2d0 pi)) ;; phase unwrapping
+       (incf phi_e (* 2 pi))
+       (if (<  (* .9 2d0 pi) phi_e)
+	   (decf phi_e (* 2 pi))))
+     
+    ; (format t "~a~%" phi_e)
+     (progn ;; digital filter
+       (let* ((top (+ (* c1 phi_e) old-filt))
+	      (bottom (* c2 phi_e))
+	      (filt-out (+ top bottom)))
+	 (setf old-filt top)
+	 (let* ((znew  ;; VCO
+		 (exp (complex 0 (+ (* divider/ c) filt-out old-phi))))
+		(znew3 (exp (complex 0
+				     (+ c filt-out old-phi3)))))
+	   (setf old-phi (phase znew)
+		 old-phi3-cont (+ c filt-out old-phi3-cont)
+		 old-phi3 (phase znew3))
+	   (values
+	    old-phi3-cont
+	    filt-out
+	    znew
+	    znew3)))))))
 
 (defmacro with-plot ((stream fn) &body body)
   `(progn
      (with-open-file (s "/dev/shm/o.gp" :direction :output
 		       :if-exists :supersede
 		       :if-does-not-exist :create)
-       (format s "plot ~s u 1:2 w l;pause -1" ,fn))
+       (format s "plot ~s u 1:2 w l, ~s u 1:3 w l, ~s u 1:4 w l, ~s u 1:5 w l;pause -1"
+	       ,fn ,fn ,fn ,fn))
      (with-open-file (,stream ,fn :direction :output
 		       :if-exists :supersede
 		       :if-does-not-exist :create)
        ,@body)))
 
-
-
-(let ((old-phi 0d0)
-      (old-phi1 0d0)
-      (old-phi-cont 0d0)
-      (old-filt 0d0))
-  (defun reset-dpll3 (&optional (z (complex 0d0)))
-    (setf old-phi1 (phase z)
-	  old-phi 0d0
-	  old-phi-cont 0d0
-	  old-filt 0d0))
-  (defun dpll3 (z) ;; generate 3 times input frequency
-    (declare (type (complex double-float) z)
-	     (values (complex double-float) ;; 19kHz 
-		     (complex double-float) ;; 57kHz
-		     double-float ;; phase
-		     &optional))
-   (let* ((f0 (* 3 -19.1d3))
-	  (fs 256d3)
-	  (eta .707d0)
-	  (fn 5000d0)
-	  (omega_n (* 2 pi fn))
-	  (c2 (* 2 eta omega_n (/ fs)))
-	  (c1 (/ (expt c2 2)
-		 (* 4 (expt eta 2))))
-	  (c (/ (* 2 pi f0) 
-		fs)))
-     (unless (and (< 0 c1)
-		  (< (- (* 2 c2) 4) c1 c2))
-       (error "filter parameters are not stable"))
-     (let* ((phi_i (phase z)) ;; PD
-	    (phi_e (- phi_i old-phi1))) 
-       ;(format t "~a~%" phi_e)
-       (progn ;; digital filter
-	 (let* ((top (+ (* c1 phi_e) old-filt))
-		(bottom (* c2 phi_e))
-		(filt-out (+ top bottom)))
-	   (setf old-filt top)
-	   (let ((znew  ;; VCO
-		  (exp (complex 0 (+ c filt-out old-phi))))
-		 (znew1 
-		  (exp (complex 0 (+ (/ c 3) filt-out old-phi1)))))
-	     (setf old-phi (phase znew)
-		   old-phi-cont (+ c filt-out old-phi-cont)
-		   old-phi1 (phase znew1))
-	     (values znew1 ;; complex oscillator 19kHz
-		     znew  ;; complex oscillator 57kHz
-		     old-phi-cont ;; continuous phase of 57kHz oscillator
-		     ))))))))
-
-
-
 #+nil
 (with-plot (s "/dev/shm/o.dat")
-  (reset-dpll3 (aref *pilot-c* 0))
-  (format s "0 0~%")
-  (loop for e across *pilot-c* and i below 3000 do
-       (format s "~f ~9,4f~%" (1+ i)	; (realpart e) 
-	       (realpart (dpll3 e))
-	       ))
-  (terpri s)
-  (loop for e across *pilot-c* and i below 2700 do
-       (format s "~f ~9,4f~%" i  (realpart (exp (complex 0  (phase e)))))))
-
-
-(defparameter *rds*
- (progn ;; cut out +/-2kHz around 57kHz, but leave at 57 kHz
-   (let* ((bw 4000)
-	  (d (fftshift (napa-fft:fft *demod-heterodyn*)))
-	  (nn (length d))
-	  (nh (floor nn 2))
-	  (center-bin (floor (* 57d3 nn
-				(/ 512d3))))
-	  (band-bin (floor (* bw nn
-			      (/ 512d3))
-			     2))
-	  (a (make-array nn :element-type (array-element-type d))))
-     (loop for i from (- center-bin band-bin)
-	below (+ center-bin band-bin)
-	do
-	  (setf (aref a (+ nh i)) (aref d (+ nh i))
-		(aref a (- nh i)) (aref d (- nh i))))
-     (napa-fft:ifft (fftshift a)))))
-
-(progn
- (defparameter *rds-c* 
-   (progn ;; cut out +/-50Hz around 19kHz, leave at 19kHz but single side band
-     (let* ((bw 4000)
-	    (d (fftshift (napa-fft:fft *demod-pll*)))
-	    (nn (length d))
-	    (nh (floor nn 2))
-	    (center-bin (floor (* 57d3 nn
-				  (/ 2048d3))))
-	    (band-bin (floor (* bw nn
-				(/ 2048d3))
-			     2))
-	    (a (make-array nh :element-type (array-element-type d))))
-       (loop for i from (- center-bin band-bin)
-	  below (+ center-bin band-bin) and ii from (- band-bin)
-	  do
-	    (setf (aref a (+ (floor nh 2) center-bin ii))
-		(aref d (+ nh i))))
-       (napa-fft:ifft (fftshift a)))))
- (store-cdfloat "/dev/shm/rds.cdfloat"
-		*rds-c*))
+  (reset-dpll3 :z (aref *pilot-c* 10000)
+	      ; :z3 (aref *rds-c* 0)
+	       :f0 (* 2 -19d3)
+	       :divider 3d0
+	       :fs *small-rate*
+	       :fn 50d0)
+  (loop for i from 10000 below 17000 do
+       (let ((e (aref *pilot-c* i))
+	     (e-next (aref *pilot-c* (1+ i))))
+	(multiple-value-bind (phi er z z3) (dpll3 e)
+	  (format s "~f ~f ~f ~f ~f~%" i 
+		  (realpart (/ e-next
+			       (abs e-next)))
+		  (realpart z)
+		  (realpart z3) (* 1d4 er))))))
 
 
 (defparameter *bpsk-c* nil)
