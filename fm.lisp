@@ -143,9 +143,9 @@
 			  :initial-element (complex .0d0))))
     (loop for i
        from (+ (- bw) nh center-bin)
-       below (+ bw nh center-bin)        
+       below (+ bw nh center-bin) and ii from (- nh bw)        
        do
-	 (setf (aref res i) (aref *kin* i)))
+	 (setf (aref res ii) (aref *kin* i)))
     res))
 
 
@@ -181,7 +181,13 @@
 	     (optimize speed)
 	     (values double-float (complex double-float) &optional))
    (let* ((phi_i (phase z)) ;; PD
-	  (phi_e (- phi_i old-phi))) 
+	  (phi_e (- phi_i old-phi)))
+     
+     (if (< phi_e (* .9 -2d0 pi)) ;; phase unwrapping
+       (incf phi_e (* 2 pi))
+       (if (<  (* .9 2d0 pi) phi_e)
+	   (decf phi_e (* 2 pi))))
+     
     ; (format t "~a~%" phi_e)
      (progn ;; digital filter
        (let* ((top (+ (* c1 phi_e) old-filt))
@@ -192,18 +198,23 @@
 		 (exp (complex 0 (+ c filt-out old-phi)))))
 	   (setf old-phi (phase znew))
 	   (values 
-	    phi_e
+	    filt-out
 	    znew)))))))
 
 (progn
   (reset-dpll :z (aref *input-filt* 0)
-	      :f0 -509d3 :fs 2048d3 :fn 170d3)
+	      :f0 100d0 :fs 2048d3 :fn 180d3)
   (let* ((n (length *input-filt*))
+	 (ac (make-array n :element-type '(complex double-float)))
 	 (a (make-array n :element-type 'double-float)))
     (dotimes (i n)
-      (setf (aref a i) (multiple-value-bind (q b) (dpll (aref *input-filt* i)) 
-			 q)))
-    (store-dfloat "/dev/shm/track.dfloat" a)))
+	 (multiple-value-bind (q b) (dpll (aref *input-filt* i)) 
+	   (setf (aref ac i) b
+		 (aref a i) q)))
+
+    (store-dfloat "/dev/shm/track.dfloat" a)
+    (defparameter *track* ac)
+    (store-cdfloat "/dev/shm/track.cdfloat" ac)))
 
 
 ;; s = A e^ip
@@ -212,17 +223,20 @@
 ;; p' = Im[ds/dt /s]
 (progn ;; demodulate using heterodyne division
   (defparameter *demod-heterodyn*
-    (let* ((in *input-filt*)
+    (let* ((in *track*)
 	   (n (length in))
-	   
 	   (d (make-array n 
-			  :element-type 'double-float)))
+			  :element-type 'double-float))
+	   (old-sample (complex 0d0)))
       (loop for i from 1 below n do
 	   (let* ((s (aref in i))
 		  (ds/dt (- s (aref in (1- i)))))
 	     (declare (type (complex double-float) s ds/dt))
-	     (setf (aref d i) (imagpart (/ ds/dt
-					   s)))))
+	     (setf old-sample
+		   (setf (aref d i) (imagpart (if (< (abs s) .01d0)
+						  old-sample
+						  (/ ds/dt
+						     s)))))))
       d))
   (store-dfloat "/dev/shm/demod-heterodyn.dfloat" *demod-heterodyn*)
   nil)
