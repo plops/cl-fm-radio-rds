@@ -281,6 +281,31 @@
 		       :if-exists :supersede
 		       :if-does-not-exist :create)
        ,@body)))
+(progn ;; calculate phase derivative
+  (let* ((n (length *pilot-c*))
+	 (ac (make-array n :element-type '(complex double-float)))
+	 (a (make-array n :element-type 'double-float))
+	 (ph (make-array n :element-type 'double-float)))
+    (reset-dpll3 :z (aref *pilot-c* 0)
+		 :z3 (aref *rds-c* 0)
+		 :f0 (* 2 -19d3)
+		 :divider 3d0
+		 :fs *small-rate*
+		 :fn 20d0)
+    (dotimes (i (1- n))
+      (let ((e (aref *pilot-c* i))
+	    (r-next (aref *rds-c* (1+ i))))
+	(multiple-value-bind (phi er z z3) (dpll3 e)
+	  (setf (aref ac i) (/ r-next z3)
+		(aref ph i) phi))))
+    (dotimes (i (1- n))
+      (setf (aref a i) (imagpart (/ (- (aref ac (1+ i))
+				       (aref ac i))
+				    (aref ac i)))))
+    (defparameter *dphase* a)
+    (defparameter *dphase-arg* ph)
+    (store-dfloat "/dev/shm/dphase.dfloat" a)))
+
 
 #+nil
 (with-plot (s "/dev/shm/o.dat")
@@ -295,11 +320,14 @@
 	     (e-next (aref *pilot-c* (1+ i)))
 	     (r-next (aref *rds-c* (1+ i))))
 	(multiple-value-bind (phi er z z3) (dpll3 e)
-	  (format s "~f ~f ~f ~f ~f~%" i 
-		  (realpart (/ r-next
+	  (format s "~f ~f ~f ~f ~f~%" 
+		  ;; push data together around sample points
+		  (let ((s (* 2 pi 48))) (multiple-value-bind (a b) (floor (+ 1 phi) s)
+					  (+ a (+ (- .15) (* .3 (/ b s)))))) 
+		  0 #+nil (realpart (/ r-next
 			       (abs r-next)))
 		  (phase (/ r-next z3))
-		  (realpart z3) 
+		  0 #+nil (realpart z3) 
 		  (* 1d4 er))))))
 
 
