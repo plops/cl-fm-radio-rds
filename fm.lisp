@@ -108,10 +108,10 @@
 	 (nh (floor n 2))
 	 (center-bin (/ (* n -507250)
 			*rate*))
-	 (bw (floor (* n 120000) ;; bandpass +/- 60kHz
+	 (bw (floor (* n 170000) ;; bandpass +/- 60kHz
 		    *rate*))
 	 (small-n (* 2
-		     4 ;; oversample for later pll application
+		     1 ;; oversample for later pll application
 		     (next-power-of-two bw)))
 	 (res (make-array small-n :element-type (array-element-type *kin*)
 			  :initial-element (complex .0d0))))
@@ -135,7 +135,17 @@
 		 *input-filt*)
   nil)
 
-
+120
+100
+80
+180
+140
+130
+125
+180
+200
+170
+190
 
 ;; s = A e^ip
 ;; ds/dt = d/dt A e^ip = A ip' e^ip
@@ -184,108 +194,49 @@
   (store-cdfloat "/dev/shm/pilot.cdfloat"
 		 *pilot-c*))
 
-(time
- (progn
-   (defparameter *rds-c* 
-     (progn ;; cut out +/-2000Hz around 57kHz, leave at 57kHz but single side band
-       (let* ((bw 4000)
-	      (d (fftshift (napa-fft:fft *demod-heterodyn*)))
-	      (nn (length d))
-	      (nh (floor nn 2))
-	      (center-bin (floor (* 57d3 nn
-				    (/ *small-rate*))))
-	      (band-bin (floor (* bw nn
-				  (/ *small-rate*))
-			       2))
-	      (a (make-array nh :element-type '(complex double-float))))
-	 (loop for i from (- center-bin band-bin)
-	    below (+ center-bin band-bin) and ii from (- band-bin)
-	    do
-	    (setf (aref a (+ (floor nh 2) center-bin ii)) (aref d (+ nh i))))
-	 (napa-fft:ifft (fftshift a)))))
-   (store-cdfloat "/dev/shm/rds.cdfloat"
-		  *pilot-c*)))
+(progn
+  (defparameter *rds-c* 
+    (progn ;; cut out +/-2000Hz around 57kHz, leave at 57kHz but single side band
+      (let* ((bw 4000)
+	     (d (fftshift (napa-fft:fft *demod-heterodyn*)))
+	     (nn (length d))
+	     (nh (floor nn 2))
+	     (center-bin (floor (* 57d3 nn
+				   (/ *small-rate*))))
+	     (band-bin (floor (* bw nn
+				 (/ *small-rate*))
+			      2))
+	     (a (make-array nh :element-type '(complex double-float))))
+	(loop for i from (- center-bin band-bin)
+	   below (+ center-bin band-bin) and ii from (- band-bin)
+	   do
+	     (setf (aref a (+ (floor nh 2) center-bin ii)) (aref d (+ nh i))))
+	(napa-fft:ifft (fftshift a)))))
+  (store-cdfloat "/dev/shm/rds.cdfloat"
+		 *pilot-c*))
 
 
 
-(let ((old-phi 0d0)
-      (old-phi3-cont 0d0)
-      (old-phi3 0d0)
-      (old-filt 0d0)
-      (divider/ 1d0)
-      (c2 0d0)
-      (c1 0d0)
-      (c 0d0))
-  (declare (type double-float old-phi old-phi3 
-		 old-phi3-cont old-filt c2 c1 
-		 c divider/))
-  (defun reset-dpll3 (&key (z (complex 0d0)) (z3 (complex 0d0))
-		      (f0 -19.0d3)
-		      (divider 1d0)
-		      (fs 256d3) (eta .707d0) (fn 5000d0))
-    (setf old-phi (phase z)
-	  old-phi3 (phase z3)
-	  old-phi3-cont old-phi3
-	  old-filt 0d0
-	  divider/ (/ divider)
-	  c2 (* 2 eta (* 2 pi fn) (/ fs))
-	  c1 (/ (expt c2 2)
-		(* 4 (expt eta 2)))
-	  c (/ (* 2 pi (* divider f0)) 
-	       fs))
-    (unless (and (< 0 c1)
-		 (< (- (* 2 c2) 4) c1 c2))
-      (error "filter parameters are not stable")))
-  (defun dpll3 (z)
-    (declare (type (complex double-float) z)
-	     (optimize speed)
-	     (values double-float 
-		     double-float
-		     (complex double-float) 
-		     (complex double-float) &optional))
-   (let* ((phi_i (phase z)) ;; PD
-	  (phi_e (- phi_i old-phi)))
-     
-     (if (< phi_e (* .9 -2d0 pi)) ;; phase unwrapping
-       (incf phi_e (* 2 pi))
-       (if (<  (* .9 2d0 pi) phi_e)
-	   (decf phi_e (* 2 pi))))
-     
-    ; (format t "~a~%" phi_e)
-     (progn ;; digital filter
-       (let* ((top (+ (* c1 phi_e) old-filt))
-	      (bottom (* c2 phi_e))
-	      (filt-out (+ top bottom)))
-	 (setf old-filt top)
-	 (let* ((znew  ;; VCO
-		 (exp (complex 0 (+ (* divider/ c) filt-out old-phi))))
-		(znew3 (exp (complex 0
-				     (+ c filt-out old-phi3)))))
-	   (setf old-phi (phase znew)
-		 old-phi3-cont (+ c filt-out old-phi3-cont)
-		 old-phi3 (phase znew3))
-	   (values
-	    old-phi3-cont
-	    filt-out
-	    znew
-	    znew3)))))))
+let ((old-phi 0d0)
+     (old-phi3-cont 0d0)
+     (old-phi3 0d0)
+     (old-filt 0d0)
+     (divider/ 1d0)
+     (c2 0d0)
+     (c1 0d0)
+     (c 0d0))
+(declare (type double-float old-phi old-phi3 
+	       old-phi3-cont old-filt c2 c1 
+	       c divider/))
 
-(defmacro with-plot ((stream fn) &body body)
-  `(progn
-     (with-open-file (s "/dev/shm/o.gp" :direction :output
-		       :if-exists :supersede
-		       :if-does-not-exist :create)
-       (format s "plot ~s u 1:2 w l, ~s u 1:3 w l, ~s u 1:4 w l, ~s u 1:5 w l;pause -1"
-	       ,fn ,fn ,fn ,fn))
-     (with-open-file (,stream ,fn :direction :output
-		       :if-exists :supersede
-		       :if-does-not-exist :create)
-       ,@body)))
+
+
 (progn ;; calculate phase derivative
   (let* ((n (length *pilot-c*))
 	 (ac (make-array n :element-type '(complex double-float)))
 	 (a (make-array n :element-type 'double-float))
-	 (ph (make-array n :element-type 'double-float)))
+	 (ph (make-array n :element-type 'double-float))
+	 (max-err 0d0))
     (reset-dpll3 :z (aref *pilot-c* 0)
 		 :z3 (aref *rds-c* 0)
 		 :f0 (* 2 -19d3)
@@ -297,38 +248,40 @@
 	    (r-next (aref *rds-c* (1+ i))))
 	(multiple-value-bind (phi er z z3) (dpll3 e)
 	  (setf (aref ac i) (/ r-next z3)
-		(aref ph i) phi))))
+		(aref ph i) phi
+		max-err (max max-err (abs er))))))
     (dotimes (i (1- n))
       (setf (aref a i) (imagpart (/ (- (aref ac (1+ i))
 				       (aref ac i))
 				    (aref ac i)))))
     (defparameter *dphase* a)
     (defparameter *dphase-arg* ph)
+    (defparameter *dphase-max-err* max-err)
     (store-dfloat "/dev/shm/dphase.dfloat" a)))
 
+(defmacro with-plot ((stream fn) &body body)
+  `(progn
+     (with-open-file (s "/dev/shm/o.gp" :direction :output
+		       :if-exists :supersede
+		       :if-does-not-exist :create)
+       (format s #+nil "plot ~s u 1:2 w l, ~s u 1:3 w l, ~s u 1:4 w l, ~s u 1:5 w l;pause -1"
+	       #+nil "plot ~s u 1:2 w p pt 0 ps 0;pause -1"
+	       "plot ~s u 1:2 w l;pause -1"
+	       ,fn))
+     (with-open-file (,stream ,fn :direction :output
+		       :if-exists :supersede
+		       :if-does-not-exist :create)
+       ,@body)))
 
 #+nil
 (with-plot (s "/dev/shm/o.dat")
-  (reset-dpll3 :z (aref *pilot-c* 10000)
-	       :z3 (aref *rds-c* 10000)
-	       :f0 (* 2 -19d3)
-	       :divider 3d0
-	       :fs *small-rate*
-	       :fn 50d0)
-  (loop for i from 10000 below 17000 do
-       (let ((e (aref *pilot-c* i))
-	     (e-next (aref *pilot-c* (1+ i)))
-	     (r-next (aref *rds-c* (1+ i))))
-	(multiple-value-bind (phi er z z3) (dpll3 e)
-	  (format s "~f ~f ~f ~f ~f~%" 
-		  ;; push data together around sample points
-		  (let ((s (* 2 pi 48))) (multiple-value-bind (a b) (floor (+ 1 phi) s)
-					  (+ a (+ (- .15) (* .3 (/ b s)))))) 
-		  0 #+nil (realpart (/ r-next
-			       (abs r-next)))
-		  (phase (/ r-next z3))
-		  0 #+nil (realpart z3) 
-		  (* 1d4 er))))))
+  (loop for i from 10000 below 30000 do
+       (let ((e (aref *dphase* i))
+	     (x (aref *dphase-arg* i)))
+	 (format s "~f ~f~%" 
+		 (let ((s (* 2 pi 48))) 
+		   (- (/ x s)) ) 
+		 e))))
 
 
 (defparameter *bpsk-c* nil)
