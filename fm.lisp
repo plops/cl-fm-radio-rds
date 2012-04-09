@@ -95,7 +95,7 @@
 
 (progn
   (setf *rate* 2048000)
-  (setf *n-complex* (floor (expt 2 18)))
+  (setf *n-complex* (floor (expt 2 24)))
   (defparameter *input*
     (let* ((n (* 2 *n-complex*))
 	   (a (make-array n :element-type '(unsigned-byte 8)))
@@ -203,7 +203,7 @@
 
 (progn
   (reset-dpll :z (aref *input-filt* 0)
-	      :f0 100d0 :fs 2048d3 :fn 180d3)
+	      :f0 100d0 :fs 2048d3 :fn 60d3)
   (let* ((n (length *input-filt*))
 	 (ac (make-array n :element-type '(complex double-float)))
 	 (a (make-array n :element-type 'double-float)))
@@ -223,7 +223,7 @@
 ;; p' = Im[ds/dt /s]
 (progn ;; demodulate using heterodyne division
   (defparameter *demod-heterodyn*
-    (let* ((in *track*)
+    (let* ((in *input-filt*)
 	   (n (length in))
 	   (d (make-array n 
 			  :element-type 'double-float))
