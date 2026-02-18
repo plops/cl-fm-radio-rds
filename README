@@ -2,3 +2,15 @@ The goal is to demodulate FM radio and read the digital RDS data.
 
 some crude documentation, with screenshots
 https://docs.google.com/presentation/d/1h3YfUgG9AgiMPInikIp51qMPWKpkTm7nRaWL1uOS-CQ/edit
+
+
+The cl-fm-radio-rds system performs offline batch processing of FM radio signals to extract digital RDS data. The system:
+
+1. Reads raw IQ samples from a recorded FM radio signal file (dl2048000.fm)
+2. Downsamples the signal from 2.048 MHz to 256 kHz using FFT-based frequency domain filtering
+3. Demodulates the FM signal to extract instantaneous frequency information
+4. Isolates the 19 kHz pilot tone and 57 kHz RDS carrier using narrow-band filtering
+5. Tracks carrier phase using a Digital Phase-Locked Loop (DPLL) implementation
+6. Outputs processed signals as binary files for downstream analysis
+
+The system is designed as a *research and development tool* for FM radio signal processing, not a real-time production system. All processing occurs in-memory on pre-recorded signals.
