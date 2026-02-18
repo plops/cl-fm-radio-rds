@@ -14,3 +14,13 @@ The cl-fm-radio-rds system performs offline batch processing of FM radio signals
 6. Outputs processed signals as binary files for downstream analysis
 
 The system is designed as a *research and development tool* for FM radio signal processing, not a real-time production system. All processing occurs in-memory on pre-recorded signals.
+
+
+The heart of the system
+=======================
+
+The dpll3 implementation, a second-order digital phase-locked loop used to track the phase and frequency of FM radio carriers. The DPLL processes the extracted 19 kHz pilot tone and 57 kHz RDS carrier to generate stable phase references and recover instantaneous frequency information for RDS data decoding.
+
+The DPLL implements a classical feedback control loop that locks onto an input carrier frequency and tracks its phase variations. The system uses a second-order loop filter for improved noise rejection and tracking performance.
+
+The DPLL processes both the 19 kHz pilot tone and 57 kHz RDS carrier simultaneously using a frequency multiplication strategy.
